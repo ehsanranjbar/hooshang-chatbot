@@ -32,6 +32,8 @@ const Help = `سلام! من هوشنگم 🌸
 /notease — دیگه سربه‌سرم نذار
 /teaseok — اشکال نداره، سربه‌سرم بذار
 /forgetme — هر چی ازم یادته پاک کن
+/ignoreme — دیگه پیام‌هام رو نخون و نگه نداز، هرچی داری هم پاک کن
+/unignoreme — برگرد به حالت عادی
 /mute — هوشنگ خودجوش حرف نزنه (ادمین)
 /unmute — هوشنگ دوباره خودجوش حرف بزنه (ادمین)
 /status — وضعیت ربات (ادمین)
@@ -74,6 +76,16 @@ const (
 	Forgotten  = "پاک شد. انگار اولین باره همدیگه رو می‌بینیم 👋"
 	Muted      = "باشه، فقط وقتی صدام کنید حرف می‌زنم 🤐"
 	Unmuted    = "برگشتم! 🎉"
+)
+
+// IgnoredTarget is sent when the roast target has asked, with /ignoreme, not to
+// be seen at all.
+const IgnoredTarget = "ایشون خواسته اصلاً نبینمشون، پس کاری باهاشون ندارم 🙈"
+
+// Confirmations of /ignoreme and /unignoreme.
+const (
+	IgnoreOn  = "باشه، از این به بعد پیام‌هات رو نمی‌بینم و هرچی ازت داشتم پاک شد. با /unignoreme برمی‌گردی."
+	IgnoreOff = "خوش برگشتی! از حالا دوباره پیام‌هات رو می‌بینم 👋"
 )
 
 // RateLimited is the note returned to the LLM when a rate limit is hit

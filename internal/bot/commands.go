@@ -75,6 +75,12 @@ func (b *Bot) handleCommand(ctx context.Context, m *telego.Message, text string)
 		_ = b.deps.DB.DeleteMember(chatID, from)
 		b.replyCommand(m, i18n.Forgotten)
 
+	case "ignoreme":
+		b.handleIgnoreMe(m)
+
+	case "unignoreme":
+		b.handleUnignoreMe(m)
+
 	case "mute":
 		if !isAdmin {
 			return
@@ -200,6 +206,10 @@ func (b *Bot) handleStatus(m *telego.Message) {
 	if g := b.deps.Cfg.Features.Glossary; g.On() {
 		terms, _ := b.deps.DB.Terms(chatID)
 		fmt.Fprintf(&sb, "Glossary: %d/%d terms\n", len(terms), g.MaxItems)
+	}
+	if b.deps.Cfg.Features.Moderation.On() {
+		chat, _ := b.deps.DB.GetChat(chatID)
+		fmt.Fprintf(&sb, "Moderation allowed: %s\n", actionList(b.allowedActions(chat)))
 	}
 	if len(edits) > 0 {
 		sb.WriteString("\nLast edits:\n")

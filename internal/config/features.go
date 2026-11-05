@@ -34,6 +34,7 @@ type Features struct {
 	Roast       *RoastFeature       `yaml:"roast"`        // /roast
 	Voice       *VoiceFeature       `yaml:"voice"`        // transcribing voice messages
 	Greetings   *GreetingsFeature   `yaml:"greetings"`    // answering صبح/شب بخیر, welcoming and seeing off members
+	Moderation  *ModerationFeature  `yaml:"moderation"`   // the admin moderates in plain words
 }
 
 // GreetingsFeature is features.greetings: the bot sometimes answers a
@@ -131,6 +132,19 @@ type VoiceFeature struct {
 	VideoNotes  bool          `yaml:"video_notes"`  // also transcribe round video messages; default true
 }
 
+// ModerationActions are the actions the moderate tool knows, in a fixed order.
+var ModerationActions = []string{"delete", "mute", "kick", "ban", "unban", "pin", "unpin"}
+
+// ModerationFeature is features.moderation: the admin tells the bot in plain
+// words to delete, mute, kick, ban, unban, pin or unpin, and it acts at once.
+type ModerationFeature struct {
+	Enabled     bool          `yaml:"enabled"`
+	Actions     []string      `yaml:"actions"`      // what the bot may do; default all of ModerationActions
+	DefaultMute time.Duration `yaml:"default_mute"` // mute length when none is given; default 1h
+	MaxMute     time.Duration `yaml:"max_mute"`     // longest mute; default 168h
+	MaxDelete   int           `yaml:"max_delete"`   // most messages deleted in one request; default 20
+}
+
 // On reports whether the feature is on: its section is present and not disabled.
 func (f *ProfilesFeature) On() bool { return f != nil && f.Enabled }
 
@@ -154,6 +168,17 @@ func (f *RoastFeature) On() bool { return f != nil && f.Enabled }
 
 // On reports whether the feature is on: its section is present and not disabled.
 func (f *VoiceFeature) On() bool { return f != nil && f.Enabled }
+
+// On reports whether the feature is on: its section is present and not disabled.
+func (f *ModerationFeature) On() bool { return f != nil && f.Enabled }
+
+// UnmarshalYAML fills the defaults, then the keys of the section.
+func (f *ModerationFeature) UnmarshalYAML(n *yaml.Node) error {
+	type plain ModerationFeature
+	*f = ModerationFeature{Enabled: true, Actions: append([]string(nil), ModerationActions...),
+		DefaultMute: time.Hour, MaxMute: 168 * time.Hour, MaxDelete: 20}
+	return decodeFeature(n, "moderation", (*plain)(f))
+}
 
 // UnmarshalYAML fills the defaults, then the keys of the section.
 func (f *ProfilesFeature) UnmarshalYAML(n *yaml.Node) error {
@@ -336,6 +361,7 @@ func (f Features) Active() []string {
 		{"profiles", f.Profiles.On()}, {"group_memory", f.GroupMemory.On()}, {"glossary", f.Glossary.On()},
 		{"media", f.Media.On()}, {"faal", f.Faal.On()}, {"poem", f.Poem.On()},
 		{"roast", f.Roast.On()}, {"voice", f.Voice.On()}, {"greetings", f.Greetings.On()},
+		{"moderation", f.Moderation.On()},
 	} {
 		if e.on {
 			on = append(on, e.name)
@@ -377,7 +403,29 @@ func (f *Features) validate() error {
 			return fmt.Errorf("features.media: frames must be in [1, 8]")
 		}
 	}
+	if err := f.Moderation.validate(); err != nil {
+		return err
+	}
 	return f.Voice.validate()
+}
+
+// validate checks the moderation settings of a feature that is on.
+func (m *ModerationFeature) validate() error {
+	if !m.On() {
+		return nil
+	}
+	for _, a := range m.Actions {
+		if !contains(ModerationActions, a) {
+			return fmt.Errorf("features.moderation.actions: unknown action %q (allowed: %s)", a, strings.Join(ModerationActions, ", "))
+		}
+	}
+	if m.DefaultMute <= 0 || m.MaxMute <= 0 || m.DefaultMute > m.MaxMute {
+		return fmt.Errorf("features.moderation: default_mute and max_mute must be > 0 and default_mute <= max_mute")
+	}
+	if m.MaxDelete < 1 || m.MaxDelete > 100 {
+		return fmt.Errorf("features.moderation: max_delete must be in [1, 100]")
+	}
+	return nil
 }
 
 // enModel matches the file name of an English-only whisper model (ggml-base.en.bin).

@@ -175,3 +175,73 @@ func TestGroupEventsAndMessageUpdates(t *testing.T) {
 		})
 	}
 }
+
+func TestModerationStorage(t *testing.T) {
+	for name, db := range engines(t) {
+		t.Run(name, func(t *testing.T) {
+			const chat = int64(-777)
+
+			// ModActions: nil until set, then the explicit set round-trips.
+			if c, _ := db.GetChat(chat); c.ModActions != nil {
+				t.Fatalf("ModActions = %v, want nil", c.ModActions)
+			}
+			if err := db.UpdateChat(chat, func(c *Chat) { c.ModActions = map[string]bool{"delete": true} }); err != nil {
+				t.Fatal(err)
+			}
+			if c, _ := db.GetChat(chat); len(c.ModActions) != 1 || !c.ModActions["delete"] {
+				t.Fatalf("ModActions = %v", c.ModActions)
+			}
+
+			// mod_log: newest first, chat isolation.
+			until := time.Now().Add(time.Hour).Truncate(time.Second)
+			db.AddModEntry(chat, &ModEntry{AdminID: 1, Action: "delete", TargetID: 7, MsgIDs: []int64{3, 4}})
+			db.AddModEntry(chat, &ModEntry{AdminID: 1, Action: "mute", TargetID: 7, TargetName: "Ali", Until: until, Err: "boom"})
+			db.AddModEntry(chat-1, &ModEntry{Action: "ban"})
+			es, err := db.RecentModEntries(chat, 10)
+			if err != nil || len(es) != 2 || es[0].Action != "mute" || es[0].Err != "boom" || !es[0].Until.Equal(until) || es[0].At.IsZero() {
+				t.Fatalf("entries = %+v %v", es, err)
+			}
+			if len(es[1].MsgIDs) != 2 || es[1].MsgIDs[1] != 4 {
+				t.Fatalf("msg ids = %v", es[1].MsgIDs)
+			}
+			if es, _ := db.RecentModEntries(chat, 1); len(es) != 1 {
+				t.Fatalf("limit: %d", len(es))
+			}
+		})
+	}
+}
+
+func TestDeleteMessagesByAndAllMedia(t *testing.T) {
+	for name, db := range engines(t) {
+		t.Run(name, func(t *testing.T) {
+			const chat, other = int64(-888), int64(-889)
+			for i := int64(1); i <= 6; i++ {
+				db.AddMessage(chat, i, &Message{UserID: 7 + i%2, Text: "m"})
+			}
+			db.AddMessage(other, 1, &Message{UserID: 7, Text: "elsewhere"})
+			n, err := db.DeleteMessagesBy(chat, 7) // i odd -> user 8; i even -> user 7: three each
+			if err != nil || n != 3 {
+				t.Fatalf("deleted %d, %v", n, err)
+			}
+			left, _ := db.RecentMessages(chat, 10)
+			if len(left) != 3 {
+				t.Fatalf("left = %+v", left)
+			}
+			for _, m := range left {
+				if m.UserID == 7 {
+					t.Fatalf("a message of user 7 survived: %+v", m)
+				}
+			}
+			if m, _ := db.RecentMessages(other, 10); len(m) != 1 {
+				t.Fatal("another chat was touched")
+			}
+
+			db.PutMediaDesc(MediaDesc{UniqueID: "a", Kind: "sticker", Text: "cat", FileID: "f1"}, time.Hour)
+			db.PutMediaDesc(MediaDesc{UniqueID: "b", Kind: "gif", Text: "dog"}, time.Hour) // no file id: not sendable, still exported
+			all, err := db.AllMedia()
+			if err != nil || len(all) != 2 {
+				t.Fatalf("media = %+v %v", all, err)
+			}
+		})
+	}
+}

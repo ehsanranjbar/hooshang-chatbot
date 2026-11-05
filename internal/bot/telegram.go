@@ -21,6 +21,19 @@ type TG interface {
 	SetMessageReaction(ctx context.Context, p *telego.SetMessageReactionParams) error
 	SendSticker(ctx context.Context, p *telego.SendStickerParams) (*telego.Message, error)
 	SendAnimation(ctx context.Context, p *telego.SendAnimationParams) (*telego.Message, error)
+
+	// Moderation (features.moderation).
+	BanChatMember(ctx context.Context, p *telego.BanChatMemberParams) error
+	UnbanChatMember(ctx context.Context, p *telego.UnbanChatMemberParams) error
+	RestrictChatMember(ctx context.Context, p *telego.RestrictChatMemberParams) error
+	DeleteMessage(ctx context.Context, p *telego.DeleteMessageParams) error
+	DeleteMessages(ctx context.Context, p *telego.DeleteMessagesParams) error
+	PinChatMessage(ctx context.Context, p *telego.PinChatMessageParams) error
+	UnpinChatMessage(ctx context.Context, p *telego.UnpinChatMessageParams) error
+
+	// Wired for a later phase (profile photos, chat details); nothing calls them yet.
+	GetUserProfilePhotos(ctx context.Context, p *telego.GetUserProfilePhotosParams) (*telego.UserProfilePhotos, error)
+	GetChat(ctx context.Context, p *telego.GetChatParams) (*telego.ChatFullInfo, error)
 }
 
 // errConcreteTG is returned when a concrete *telego.Bot is required (polling,

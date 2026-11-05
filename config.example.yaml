@@ -154,6 +154,14 @@ features:
     chat_cooldown: 30m                   # don't greet anyone in the chat again within
     welcome: true
     farewell: true
+  # Moderation: the admin tells the bot in plain words («این پیامو حذف کن», «علی رو یه ساعت ساکت کن»,
+  # «بن کن») and it acts at once. The bot needs the matching admin rights (delete messages, ban users,
+  # pin messages). Admins can narrow the allowed actions at runtime («فقط حذف کن، بن نکن»).
+  moderation:
+    actions: [delete, mute, kick, ban, unban, pin, unpin]   # what the bot may do (default all)
+    default_mute: 1h                     # mute length when none is given
+    max_mute: 168h                       # longest mute
+    max_delete: 20                       # most messages deleted in one request
 
 # Rendering of the faal and poem cards (features.faal.image, features.poem.image).
 nastaliq:

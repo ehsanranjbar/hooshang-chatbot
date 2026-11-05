@@ -134,3 +134,25 @@ func (d *DB) SearchMedia(kind, query string, n int) ([]MediaDesc, error) {
 	}
 	return out, err
 }
+
+// AllMedia returns every cached sticker and GIF description (the shared media
+// cache), including the ones that cannot be sent. Used by the data export.
+func (d *DB) AllMedia() ([]MediaDesc, error) {
+	var out []MediaDesc
+	err := d.db.View(func(tx kv.Tx) error {
+		it, err := d.media.Instantiate(tx).Iterator(chatRange(0))
+		if err != nil {
+			return err
+		}
+		defer it.Close()
+		for ; it.Valid(); it.Next() {
+			v, err := it.Value()
+			if err != nil {
+				return err
+			}
+			out = append(out, *v)
+		}
+		return nil
+	})
+	return out, err
+}

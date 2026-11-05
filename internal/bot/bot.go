@@ -210,6 +210,11 @@ func (b *Bot) handleMessage(ctx context.Context, m *telego.Message) {
 		return
 	}
 
+	// Members who said /ignoreme are not read at all: nothing below runs.
+	if b.dropIgnoredSender(m, stale) {
+		return
+	}
+
 	// Joins and leaves are the one kind of service message that matters.
 	if len(m.NewChatMembers) > 0 || m.LeftChatMember != nil {
 		if !stale {

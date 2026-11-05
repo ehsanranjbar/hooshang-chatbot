@@ -162,7 +162,7 @@ func PickMode(weights map[string]int, roll float64) string {
 }
 
 // PickTarget picks a spontaneous-message target among the distinct authors of
-// the last 15 messages, excluding the bot and members with NoTease. ok is
+// the last 15 messages, excluding the bot and members with NoTease or Ignored. ok is
 // false when there is no eligible author.
 func PickTarget(recent []store.Message, members map[int64]*store.Member, botID int64, roll float64) (int64, bool) {
 	var authors []int64
@@ -174,7 +174,7 @@ func PickTarget(recent []store.Message, members map[int64]*store.Member, botID i
 		}
 		seen[m.UserID] = true
 		mem, ok := members[m.UserID]
-		if ok && mem != nil && mem.NoTease {
+		if ok && mem != nil && (mem.NoTease || mem.Ignored) {
 			continue
 		}
 		authors = append(authors, m.UserID)

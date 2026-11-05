@@ -32,6 +32,8 @@ err = db.DeleteMember(chatID, userID)                          // /forgetme
 // messages — expire after retention on Badger
 err = db.AddMessage(chatID, int64(msg.MessageID), &store.Message{...})
 msgs, err := db.RecentMessages(chatID, 30)                     // []store.Message, oldest first
+n, err := db.DeleteMessagesBy(chatID, userID)                  // /ignoreme: the member's stored messages; n = how many
+err = db.DeleteMessageIDs(chatID, []int64{12, 13})             // messages the bot deleted in Telegram
 
 m, err := db.GetMessage(chatID, msgID)                          // *store.Message (ID set), or ErrNotFound
 err = db.UpdateMessage(chatID, msgID, func(m *store.Message) { m.Reactions++ }) // keeps its expiry; missing = no-op
@@ -47,12 +49,19 @@ ts, err := db.Terms(chatID)                                     // most recently
 err = db.TouchTerms(chatID, []string{t.Norm})                   // mark as used (keeps it from eviction)
 err = db.DeleteTerm(chatID, "چاییدن")
 
+// moderation audit log (mod_log)
+err = db.AddModEntry(chatID, &store.ModEntry{AdminID: ..., Action: "mute", TargetID: ..., Until: ..., Err: ""})
+es, err := db.RecentModEntries(chatID, 10)                     // newest first
+
+// the shared sticker/GIF cache, all of it (the data export)
+all, err := db.AllMedia()                                       // []store.MediaDesc
+
 // memory edit audit log
 err = db.AddEdit(chatID, &store.Edit{AdminID: ..., UserID: ..., Request: ..., Ops: ..., Before: ..., After: ...})
 es, err := db.RecentEdits(chatID, 10)                          // newest first
 ```
 
-Types (in `internal/store/store.go`): `Chat`, `Member`, `Profile`, `Item`, `Message`, `Edit`,
+Types (in `internal/store/store.go`): `Chat`, `Member`, `Profile`, `Item`, `Message`, `Edit`, `ModEntry`,
 `Key = codec.Pair[int64, int64]`. A member's IDs are `m.ChatID()` and `m.UserID()`.
 
 **Rules:**
@@ -68,6 +77,9 @@ Types (in `internal/store/store.go`): `Chat`, `Member`, `Profile`, `Item`, `Mess
 - Adding a field to a struct is safe: values are msgpack and old records decode with the zero
   value. **Renaming or removing a field, or changing its type, needs a store version bump and a migration**
   (section 3.5). Don't do it casually.
+- Fields added so far, all zero for old records: `Chat.ModActions` (`nil` = use the config's
+  `features.moderation.actions`, otherwise the explicit allowed set) and `Member.Ignored`
+  (`/ignoreme`; a purged member is kept as `{ID, FirstName, Ignored}` so the flag survives).
 - Never add `msgpack:"-"` to `Member.ID` (see section 4).
 
 ## 2. Stores that exist
@@ -81,6 +93,7 @@ Types (in `internal/store/store.go`): `Chat`, `Member`, `Profile`, `Item`, `Mess
 | `memory_edits` | `typed.Store` | `Pair(chatID, unixNano)` | `Edit` | |
 | `group_events` | `typed.Store` | `Pair(chatID, FirstAt unixNano)` | `GroupEvent` | `SetWithTTL` from `LastAt`; at most `features.group_memory.max_items` per chat |
 | `media` | `typed.Store` | `Pair(0, FNV-64a of "media:"+file_unique_id)` | `MediaDesc` | sticker/GIF descriptions shared by all chats; `SetWithTTL` `features.media.cache_ttl` |
+| `mod_log` | `typed.Store` | `Pair(chatID, unixNano)` | `ModEntry` | audit log of the admin's moderation actions (also refused and failed ones); `AddModEntry`, `RecentModEntries(chat, n)` |
 | `terms` | `typed.Store` | `Pair(chatID, FNV-64a of NormalizeTerm(term))` | `Term` | at most `features.glossary.max_items` per chat; `PutTerm` evicts the oldest `UsedAt` in the same transaction |
 
 Group chat IDs are negative. Integer keys sort correctly with negative values (this is tested).
