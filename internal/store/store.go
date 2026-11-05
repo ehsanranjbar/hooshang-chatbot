@@ -43,6 +43,11 @@ type Chat struct {
 
 	MsgsSinceGroupUpdate int       // messages since the group memory was last updated
 	GroupUpdatedAt       time.Time // when the group memory was last updated
+
+	// ModActions is the set of moderation actions the admin allows here
+	// (action -> allowed). nil means "use the config default"; otherwise it is
+	// the explicit allowed set (an action missing from it is not allowed).
+	ModActions map[string]bool
 }
 
 // Item is one remembered thing.
@@ -78,6 +83,7 @@ type Member struct {
 	Username         string
 	Profile          Profile
 	NoTease          bool
+	Ignored          bool // /ignoreme: the bot does not read, store or talk about this member
 	MsgsSinceUpdate  int
 	LastSeen         time.Time
 	ProfileUpdatedAt time.Time
@@ -130,6 +136,19 @@ type Edit struct {
 	After   Profile
 }
 
+// ModEntry is one moderation action of the admin, kept as an audit log.
+type ModEntry struct {
+	AdminID    int64
+	Action     string // delete, mute, kick, ban, unban, pin, unpin
+	TargetID   int64  // the member acted on (0 for pin/unpin of a message)
+	TargetName string
+	MsgIDs     []int64   // the messages deleted, pinned or unpinned
+	Until      time.Time // when a mute ends (zero for other actions)
+	Reason     string
+	Err        string // why it failed or was refused ("" = it worked)
+	At         time.Time
+}
+
 // DB is the database. All methods are safe for concurrent use.
 type DB struct {
 	db        kv.DB
@@ -144,6 +163,7 @@ type DB struct {
 	events     *typed.Store[Key, GroupEvent]
 	terms      *typed.Store[Key, Term]
 	media      *typed.Store[Key, MediaDesc]
+	modLog     *typed.Store[Key, ModEntry]
 }
 
 // Open opens the Badger database in dir. Messages expire after retention.
@@ -188,8 +208,9 @@ func define(db kv.DB, retention time.Duration) (*DB, error) {
 	d.events = typed.New[Key, GroupEvent](ks.Prefix("group_events"))
 	d.terms = typed.New[Key, Term](ks.Prefix("terms"))
 	d.media = typed.New[Key, MediaDesc](ks.Prefix("media"))
+	d.modLog = typed.New[Key, ModEntry](ks.Prefix("mod_log"))
 
-	report, err := ks.Migrate(context.Background(), d.chats, d.members, d.messages, d.edits, d.events, d.terms, d.media)
+	report, err := ks.Migrate(context.Background(), d.chats, d.members, d.messages, d.edits, d.events, d.terms, d.media, d.modLog)
 	if err != nil {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
@@ -282,6 +303,59 @@ func (d *DB) DeleteMember(chatID, userID int64) error {
 	return d.db.Update(func(tx kv.Tx) error {
 		return d.members.Instantiate(tx).Delete(K(chatID, userID))
 	})
+}
+
+// DeleteMessageIDs deletes the given stored messages of the chat (ids that are
+// not stored are skipped). Used when the bot deleted them in Telegram.
+func (d *DB) DeleteMessageIDs(chatID int64, ids []int64) error {
+	return d.db.Update(func(tx kv.Tx) error {
+		s := d.messages.Instantiate(tx)
+		for _, id := range ids {
+			if err := s.Delete(K(chatID, id)); err != nil && !errors.Is(err, kv.ErrNotFound) {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// DeleteMessagesBy deletes every stored message of the chat written by userID
+// and returns how many there were. Used by /ignoreme.
+func (d *DB) DeleteMessagesBy(chatID, userID int64) (int, error) {
+	var n int
+	err := d.db.Update(func(tx kv.Tx) error {
+		s := d.messages.Instantiate(tx)
+		it, err := s.Iterator(chatRange(chatID))
+		if err != nil {
+			return err
+		}
+		var keys []Key
+		for ; it.Valid(); it.Next() {
+			v, err := it.Value()
+			if err != nil {
+				it.Close()
+				return err
+			}
+			if v.UserID != userID {
+				continue
+			}
+			k, err := it.Key()
+			if err != nil {
+				it.Close()
+				return err
+			}
+			keys = append(keys, k)
+		}
+		it.Close()
+		for _, k := range keys {
+			if err := s.Delete(k); err != nil {
+				return err
+			}
+		}
+		n = len(keys)
+		return nil
+	})
+	return n, err
 }
 
 // MemberByUsername finds a member of the chat by username (with or without @, any case), or
@@ -508,6 +582,41 @@ func (d *DB) RecentEdits(chatID int64, n int) ([]Edit, error) {
 	var out []Edit
 	err := d.db.View(func(tx kv.Tx) error {
 		it, err := d.edits.Instantiate(tx).ReverseIterator(chatRange(chatID))
+		if err != nil {
+			return err
+		}
+		defer it.Close()
+		for ; it.Valid() && len(out) < n; it.Next() {
+			v, err := it.Value()
+			if err != nil {
+				return err
+			}
+			out = append(out, *v)
+		}
+		return nil
+	})
+	return out, err
+}
+
+// ---------------------------------------------------------------- moderation log
+
+// AddModEntry appends a moderation action to the audit log of the chat. A zero
+// At is set to now.
+func (d *DB) AddModEntry(chatID int64, e *ModEntry) error {
+	if e.At.IsZero() {
+		e.At = time.Now()
+	}
+	return d.db.Update(func(tx kv.Tx) error {
+		return d.modLog.Instantiate(tx).Set(K(chatID, time.Now().UnixNano()), e)
+	})
+}
+
+// RecentModEntries returns up to n of the latest moderation actions of the
+// chat, newest first.
+func (d *DB) RecentModEntries(chatID int64, n int) ([]ModEntry, error) {
+	var out []ModEntry
+	err := d.db.View(func(tx kv.Tx) error {
+		it, err := d.modLog.Instantiate(tx).ReverseIterator(chatRange(chatID))
 		if err != nil {
 			return err
 		}

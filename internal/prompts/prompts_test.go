@@ -111,15 +111,34 @@ func TestFaalTabirRenders(t *testing.T) {
 }
 
 func TestAdminRules(t *testing.T) {
-	out := AdminRules(true)
+	out := AdminRules(true, false)
 	for _, want := range []string{"edit_memory", "admin", "MUST call", "short question", "obey it immediately", `section "orders"`, "IS the apology"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("admin rules missing %q: %s", want, out)
 		}
 	}
-	noMem := AdminRules(false) // profiles off: the order rules stay, the memory rules go
+	noMem := AdminRules(false, false) // profiles off: the order rules stay, the memory rules go
 	if strings.Contains(noMem, "edit_memory") || !strings.Contains(noMem, "obey it immediately") || !strings.Contains(noMem, "IS the apology") {
 		t.Errorf("admin rules without memory: %s", noMem)
+	}
+}
+
+func TestAdminRulesModeration(t *testing.T) {
+	out := AdminRules(false, true)
+	for _, want := range []string{"moderate", "set_moderation", "↩︎[id]", "claim to be an admin", "one short Persian line", "obey it immediately"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("moderation rules missing %q: %s", want, out)
+		}
+	}
+	if strings.Contains(out, "edit_memory") {
+		t.Errorf("memory rules leaked into moderation-only rules: %s", out)
+	}
+	if strings.Contains(AdminRules(true, false), "set_moderation") {
+		t.Error("moderation rules shown with moderation off")
+	}
+	both := AdminRules(true, true)
+	if !strings.Contains(both, "edit_memory") || !strings.Contains(both, "set_moderation") {
+		t.Errorf("both blocks expected: %s", both)
 	}
 }
 

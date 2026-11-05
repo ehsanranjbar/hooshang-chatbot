@@ -15,7 +15,7 @@ import (
 )
 
 // toolsFor returns the tool definitions and handlers for a job. The admin-only
-// tools (get_memory, edit_memory) are included only when the author is an admin.
+// tools (get_memory, edit_memory, moderate, set_moderation) are included only when the author is an admin.
 // When tools are disabled in config, no tools are returned.
 func (b *Bot) toolsFor(j job) ([]llm.Tool, map[string]llm.ToolFunc) {
 	if !b.deps.Cfg.LLM.Tools {
@@ -59,6 +59,11 @@ func (b *Bot) toolsFor(j job) ([]llm.Tool, map[string]llm.ToolFunc) {
 		)
 		handlers["get_memory"] = b.toolGetMemory(j)
 		handlers["edit_memory"] = b.toolEditMemory(j)
+	}
+	if b.deps.Cfg.Features.Moderation.On() && j.authorID() > 0 && b.deps.Admins.IsAdmin(j.chatID, j.authorID()) {
+		tools = append(tools, moderationTools()...)
+		handlers["moderate"] = b.toolModerate(j)
+		handlers["set_moderation"] = b.toolSetModeration(j)
 	}
 	return tools, handlers
 }
@@ -358,25 +363,37 @@ func lockedMark(locked bool) string {
 
 // resolveMember resolves a member reference (§6): "reply"/empty → the
 // replied-to user; @username → MemberByUsername; digits → user ID; otherwise a
-// normalized name match against the chat's members.
+// normalized name match against the chat's members. Members who said
+// /ignoreme never resolve (the bot does not talk about them).
 func (b *Bot) resolveMember(chatID int64, s string, j job) (int64, error) {
+	return b.resolveMemberOpts(chatID, s, j, false)
+}
+
+// resolveModerationTarget is resolveMember for moderation: an ignored member
+// resolves too, since being ignored must not shield anyone from the admin.
+func (b *Bot) resolveModerationTarget(chatID int64, s string, j job) (int64, error) {
+	return b.resolveMemberOpts(chatID, s, j, true)
+}
+
+// resolveMemberOpts is the shared resolver; withIgnored lets ignored members through.
+func (b *Bot) resolveMemberOpts(chatID int64, s string, j job, withIgnored bool) (int64, error) {
 	s = strings.TrimSpace(s)
 	switch {
 	case s == "" || strings.EqualFold(s, "reply"):
-		if id := replyUserID(j.msg); id != 0 {
+		if id := replyUserID(j.msg); id != 0 && (withIgnored || !b.isIgnored(chatID, id)) {
 			return id, nil
 		}
 		return 0, fmt.Errorf("error: no member to resolve")
 	case strings.HasPrefix(s, "@"):
 		mem, err := b.deps.DB.MemberByUsername(chatID, s[1:])
-		if err != nil {
+		if err != nil || (mem.Ignored && !withIgnored) {
 			return 0, fmt.Errorf("error: no member matches %s", s)
 		}
 		return mem.UserID(), nil
 	}
 	// digits → user ID, which must be a known member of this chat
 	if id, err := strconv.ParseInt(s, 10, 64); err == nil {
-		if _, err := b.deps.DB.GetMember(chatID, id); err != nil {
+		if mem, err := b.deps.DB.GetMember(chatID, id); err != nil || (mem.Ignored && !withIgnored) {
 			return 0, fmt.Errorf("error: no member matches %s", s)
 		}
 		return id, nil
@@ -389,7 +406,7 @@ func (b *Bot) resolveMember(chatID int64, s string, j job) (int64, error) {
 	norm := normalizeName(s)
 	var matches []int64
 	for _, m := range members {
-		if matchesName(m, norm) {
+		if matchesName(m, norm) && (withIgnored || !m.Ignored) {
 			matches = append(matches, m.UserID())
 		}
 	}

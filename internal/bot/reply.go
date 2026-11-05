@@ -98,7 +98,8 @@ func (b *Bot) replyRequest(j job) (llm.Request, map[string]llm.ToolFunc) {
 		Now:      prompts.FormatNow(time.Now()),
 	})
 	if j.authorID() > 0 && b.deps.Admins.IsAdmin(j.chatID, j.authorID()) {
-		sys += prompts.AdminRules(b.deps.Cfg.Features.Profiles.On()) // the edit_memory rules only with profiles
+		// The edit_memory rules only with profiles, the moderate rules only with moderation.
+		sys += prompts.AdminRules(b.deps.Cfg.Features.Profiles.On(), b.deps.Cfg.Features.Moderation.On())
 	}
 	userMsg, _ := prompts.ReplyTask(prompts.TaskData{
 		Language:   b.deps.Cfg.Bot.Language,
@@ -201,6 +202,9 @@ func (b *Bot) taskFor(j job) string {
 	task := "Reply to the >> message from " + displayNameOf(j.msg) + ". If it asks a real question (a fact, a person, the group, a term), answer it plainly and politely, with no jab. If it insults or mocks you, hit back hard. If a reaction is all it needs, call react and reply with exactly -."
 	if b.deps.Cfg.Features.Profiles.On() && b.deps.Admins.IsAdmin(j.chatID, j.msg.From.ID) {
 		task += " " + displayNameOf(j.msg) + " is the admin: if this message tells you to remember, forget or correct something about a member, call edit_memory first."
+	}
+	if b.deps.Cfg.Features.Moderation.On() && b.deps.Admins.IsAdmin(j.chatID, j.msg.From.ID) {
+		task += " If this message tells you to delete, mute, kick, ban, unban, pin or unpin, call moderate first, then report the result in one short line."
 	}
 	return task
 }
@@ -345,7 +349,7 @@ func (b *Bot) renderProfiles(j job, msgs []store.Message) string {
 				if n == 0 {
 					break
 				}
-				if !seen[m.UserID()] && memory.Render(m.Profile) != "" {
+				if !seen[m.UserID()] && !m.Ignored && memory.Render(m.Profile) != "" {
 					add(&more, m.UserID())
 					n--
 				}
@@ -358,7 +362,7 @@ func (b *Bot) renderProfiles(j job, msgs []store.Message) string {
 	used := 0
 	for i, id := range append(must, more...) {
 		mem, err := b.deps.DB.GetMember(j.chatID, id)
-		if err != nil || mem == nil {
+		if err != nil || mem == nil || mem.Ignored {
 			continue
 		}
 		r := memory.Render(mem.Profile)
@@ -381,6 +385,11 @@ func (b *Bot) aboutIDs(j job) []int64 {
 	if j.msg == nil {
 		return nil
 	}
+	return b.withoutIgnored(j.chatID, b.aboutIDsAll(j))
+}
+
+// aboutIDsAll is aboutIDs before the ignored members are dropped.
+func (b *Bot) aboutIDsAll(j job) []int64 {
 	ids := []int64{replyUserID(j.msg)}
 	ids = append(ids, b.namedIDs(j.chatID, j.msg.Text+" "+j.msg.Caption)...)
 	for _, e := range j.msg.Entities {
@@ -405,7 +414,7 @@ func (b *Bot) namedIDs(chatID int64, text string) []int64 {
 	norm := store.NormalizeTerm(text)
 	var ids []int64
 	for _, m := range members {
-		if m.UserID() == b.botID {
+		if m.UserID() == b.botID || m.Ignored {
 			continue
 		}
 		for _, name := range []string{m.FirstName, m.Profile.Nickname, m.Username} {
@@ -479,7 +488,7 @@ func (b *Bot) renderOrders(j job, msgs []store.Message) string {
 	var lines []string
 	for _, id := range ids {
 		mem, err := b.deps.DB.GetMember(j.chatID, id)
-		if err != nil || mem == nil {
+		if err != nil || mem == nil || mem.Ignored {
 			continue
 		}
 		if o := memory.RenderOrders(mem.Profile); o != "" {

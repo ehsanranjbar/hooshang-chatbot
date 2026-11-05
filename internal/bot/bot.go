@@ -209,6 +209,11 @@ func (b *Bot) handleMessage(ctx context.Context, m *telego.Message) {
 		return
 	}
 
+	// Members who said /ignoreme are not read at all: nothing below runs.
+	if b.dropIgnoredSender(m, stale) {
+		return
+	}
+
 	// Compute the text (or a media tag); ignore service messages.
 	text, isService := messageText(m)
 	if isService {

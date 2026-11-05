@@ -20,6 +20,16 @@ What it does:
 - **Hears voice messages:** voice messages and video notes are transcribed locally with
   [whisper.cpp](https://github.com/ggml-org/whisper.cpp) and the text appears in the conversation
   («[ویس: …]»). A voice that says the bot's name, or replies to it, is answered.
+- **Moderates on the admin's word** (`features.moderation`): «این پیامو حذف کن», «علی رو یه ساعت ساکت
+  کن», «بن کن» (delete, mute, kick, ban, unban, pin, unpin). It acts **immediately**, with no
+  confirmation, and only for the admin; it never touches an admin, the owner or itself. The admin
+  can narrow what it may do in words («فقط حذف کن، بن نکن»). The bot must be a group admin with the
+  rights to **delete messages**, **ban users** (kick, ban, unban and mute) and **pin messages**; an
+  action whose right is missing fails with a Telegram error that the bot reports.
+- **Respects privacy:** `/ignoreme` makes the bot stop reading a member's messages for good: their
+  stored messages and profile are deleted, nothing new is stored, and the bot never replies to or
+  talks about them. `/unignoreme` undoes it. (A quote of them inside someone else's message cannot
+  be scrubbed.)
 - **Hafez faal and poems** from [ganjoor.net](https://ganjoor.net), rendered as a Nastaliq card
   (معنی and a short تعبیر for the faal).
 
@@ -56,7 +66,7 @@ Only groups where the configured owner is a member are served; anywhere else the
    `HOOSHANG_TELEGRAM_TOKEN`. The optional parts live under `features:`: **a feature is on when
    its section is present**, so comment a section out to turn the feature off (`enabled: false`
    inside it works too and keeps its settings). The features are `profiles`, `group_memory`,
-   `glossary`, `media`, `faal`, `poem`, `roast` and `voice`. The old top-level `memory:`,
+   `glossary`, `media`, `faal`, `poem`, `roast`, `voice` and `moderation`. The old top-level `memory:`,
    `group_memory:`, `glossary:`, `media:` and `faal:` sections are rejected with a message saying
    where they moved; the Nastaliq `font` and `shaper` are now under `nastaliq:`.
    Check the result before starting:
@@ -65,7 +75,8 @@ Only groups where the configured owner is a member are served; anywhere else the
    go run ./cmd/hooshang -check -config config.yaml   # validates, lists the features that are on and the tools they found
    ```
 3. Add the bot to your group, and make it an **admin** so Telegram delivers reactions (group memory
-   and the engagement scores depend on them).
+   and the engagement scores depend on them). For `features.moderation` give it the admin rights to
+   delete messages, ban users and pin messages.
 4. Run it:
 
 ```sh
@@ -86,8 +97,12 @@ Data lives in `storage.path` (`./data`, Badger). Stop the bot before copying or 
 | `/me` | everyone | What the bot remembers about you |
 | `/notease`, `/teaseok` | everyone | Opt out of / back into teasing |
 | `/forgetme` | everyone | Delete your profile |
+| `/ignoreme` | everyone | The bot stops reading your messages and deletes what it kept of you (messages, profile) |
+| `/unignoreme` | everyone | Be seen again (what was deleted stays deleted) |
 | `/mute`, `/unmute` | admin | Stop / resume spontaneous messages |
 | `/status` | admin | Model, limiter, queues, memory counts |
+
+Moderation has no commands either: the admin just asks («هوشنگ، این رو حذف کن» as a reply to a message).
 
 Most things need no command: «هوشنگ یه فال بگیر», «یه شعر از سعدی», «هوشنگ، "چاییدن" یعنی سرما خوردن».
 
@@ -99,6 +114,9 @@ go run ./cmd/promptdump -data <copy of data/> -chat <id> [-msg <id>] [-full]   #
 LMSTUDIO_BASE_URL=http://localhost:1234/v1 go test -tags lmstudio -run TestLiveBench -v ./internal/bot   # live benchmark
 ```
 
+- `go run ./scripts/migrate-2026-11/export -data <data/> -out dump.json` dumps chats, members with
+  their profiles, group events, terms and the media cache to JSON (first half of the one-off data
+  move planned for the memory refactor; stop the bot first, the file holds private data).
 - [PLAN.md](PLAN.md) is the implementation spec: every package, flow and behavior rule.
 - [docs/MODELS.md](docs/MODELS.md): model settings, benchmark rounds and what they changed.
 - [docs/KVUTIL.md](docs/KVUTIL.md): the storage layer (`internal/store`, on

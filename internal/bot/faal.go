@@ -223,6 +223,10 @@ func (b *Bot) handleRoast(ctx context.Context, m *telego.Message) {
 		b.replyCommand(m, i18n.NoTeaseTarget)
 		return
 	}
+	if b.isIgnored(m.Chat.ID, target) {
+		b.replyCommand(m, i18n.IgnoredTarget)
+		return
+	}
 	b.enqueueReply(job{
 		kind:       jobReply,
 		chatID:     m.Chat.ID,

@@ -37,6 +37,19 @@ type fakeTG struct {
 	stickers   []*telego.SendStickerParams
 	animations []*telego.SendAnimationParams
 
+	// Moderation calls, recorded in order; modErr makes every one of them fail.
+	bans         []*telego.BanChatMemberParams
+	unbans       []*telego.UnbanChatMemberParams
+	restricts    []*telego.RestrictChatMemberParams
+	deletes      []*telego.DeleteMessageParams
+	bulkDeletes  []*telego.DeleteMessagesParams
+	pins         []*telego.PinChatMessageParams
+	unpins       []*telego.UnpinChatMessageParams
+	photoLookups []*telego.GetUserProfilePhotosParams
+	chatLookups  []*telego.GetChatParams
+	modErr       error
+	chatInfo     *telego.ChatFullInfo // returned by GetChat
+
 	nextMsgID int
 }
 
@@ -192,4 +205,70 @@ func (f *fakeTG) SendAnimation(_ context.Context, p *telego.SendAnimationParams)
 	f.nextMsgID++
 	return &telego.Message{MessageID: f.nextMsgID, Chat: telego.Chat{ID: p.ChatID.ID}, From: &telego.User{IsBot: true},
 		Animation: &telego.Animation{FileID: p.Animation.FileID}}, nil
+}
+
+func (f *fakeTG) BanChatMember(_ context.Context, p *telego.BanChatMemberParams) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.bans = append(f.bans, p)
+	return f.modErr
+}
+
+func (f *fakeTG) UnbanChatMember(_ context.Context, p *telego.UnbanChatMemberParams) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.unbans = append(f.unbans, p)
+	return f.modErr
+}
+
+func (f *fakeTG) RestrictChatMember(_ context.Context, p *telego.RestrictChatMemberParams) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.restricts = append(f.restricts, p)
+	return f.modErr
+}
+
+func (f *fakeTG) DeleteMessage(_ context.Context, p *telego.DeleteMessageParams) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deletes = append(f.deletes, p)
+	return f.modErr
+}
+
+func (f *fakeTG) DeleteMessages(_ context.Context, p *telego.DeleteMessagesParams) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.bulkDeletes = append(f.bulkDeletes, p)
+	return f.modErr
+}
+
+func (f *fakeTG) PinChatMessage(_ context.Context, p *telego.PinChatMessageParams) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pins = append(f.pins, p)
+	return f.modErr
+}
+
+func (f *fakeTG) UnpinChatMessage(_ context.Context, p *telego.UnpinChatMessageParams) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.unpins = append(f.unpins, p)
+	return f.modErr
+}
+
+func (f *fakeTG) GetUserProfilePhotos(_ context.Context, p *telego.GetUserProfilePhotosParams) (*telego.UserProfilePhotos, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.photoLookups = append(f.photoLookups, p)
+	return &telego.UserProfilePhotos{}, nil
+}
+
+func (f *fakeTG) GetChat(_ context.Context, p *telego.GetChatParams) (*telego.ChatFullInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.chatLookups = append(f.chatLookups, p)
+	if f.chatInfo != nil {
+		return f.chatInfo, nil
+	}
+	return &telego.ChatFullInfo{ID: p.ChatID.ID}, nil
 }

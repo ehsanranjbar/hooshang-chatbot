@@ -366,7 +366,7 @@ func TestLoadExampleFile(t *testing.T) {
 	if c.LLM.MaxTokens != 4096 || c.Bot.HistoryMessages != 15 || c.Bot.HistoryWindow != 20*time.Minute || c.Bot.Name != "هوشنگ" {
 		t.Errorf("example values off: %+v / %+v", c.LLM, c.Bot)
 	}
-	want := []string{"profiles", "group_memory", "glossary", "media", "faal", "poem", "roast", "voice"}
+	want := []string{"profiles", "group_memory", "glossary", "media", "faal", "poem", "roast", "voice", "moderation"}
 	if got := c.Features.Active(); !reflect.DeepEqual(got, want) {
 		t.Errorf("features on in the example = %v, want %v", got, want)
 	}

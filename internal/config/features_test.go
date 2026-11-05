@@ -143,3 +143,33 @@ func TestFFmpegFromMedia(t *testing.T) {
 		t.Errorf("FFmpeg = %q: a path is kept even when media is off", c.FFmpeg())
 	}
 }
+
+func TestModerationDefaultsAndValidation(t *testing.T) {
+	c, err := Load(writeConfig(t, minimal+"features:\n  moderation:\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := c.Features.Moderation
+	if !m.On() || strings.Join(m.Actions, ",") != strings.Join(ModerationActions, ",") ||
+		m.DefaultMute != time.Hour || m.MaxMute != 168*time.Hour || m.MaxDelete != 20 {
+		t.Errorf("moderation defaults = %+v", m)
+	}
+	c, err = Load(writeConfig(t, minimal+"features:\n  moderation:\n    actions: [delete, mute]\n    max_delete: 100\n"))
+	if err != nil || strings.Join(c.Features.Moderation.Actions, ",") != "delete,mute" {
+		t.Fatalf("actions = %+v, %v", c.Features.Moderation, err)
+	}
+	for name, sec := range map[string]string{
+		"unknown action":      "actions: [delete, explode]",
+		"default over max":    "default_mute: 200h",
+		"max_delete 0":        "max_delete: 0",
+		"max_delete over 100": "max_delete: 101",
+		"zero max_mute":       "max_mute: 0s",
+	} {
+		if _, err := Load(writeConfig(t, minimal+"features:\n  moderation:\n    "+sec+"\n")); err == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+	if _, err := Load(writeConfig(t, minimal+"features:\n  moderation:\n    enabled: false\n    max_delete: 0\n")); err != nil {
+		t.Errorf("a disabled section is not validated: %v", err)
+	}
+}
