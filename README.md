@@ -17,6 +17,9 @@ What it does:
 - **Sees media:** photos, stickers and GIFs are described by the (vision) model and appear in the
   conversation it reads; a question about a picture gets the picture itself. It can answer with a
   sticker or GIF the group has used.
+- **Hears voice messages:** voice messages and video notes are transcribed locally with
+  [whisper.cpp](https://github.com/ggml-org/whisper.cpp) and the text appears in the conversation
+  («[ویس: …]»). A voice that says the bot's name, or replies to it, is answered.
 - **Hafez faal and poems** from [ganjoor.net](https://ganjoor.net), rendered as a Nastaliq card
   (معنی and a short تعبیر for the faal).
 
@@ -31,7 +34,18 @@ Only groups where the configured owner is a member are served; anywhere else the
 - Optional: HarfBuzz (`brew install harfbuzz`) for correct Nastaliq shaping of the faal and poem
   cards. Without `hb-shape` the cards still render, flat and with some dots misplaced.
 - Optional: ffmpeg (`brew install ffmpeg`) for describing animated stickers and GIFs from several
-  frames; without it the thumbnail is used.
+  frames (without it the thumbnail is used), and required by voice transcription.
+- Optional, for voice transcription (`features.voice`): whisper.cpp and a multilingual model.
+  Persian needs a multilingual model, never a `.en` one:
+
+  ```sh
+  brew install whisper-cpp                 # provides whisper-cli
+  mkdir -p models
+  curl -L -o models/ggml-large-v3-turbo-q5_0.bin \
+    https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin   # about 570 MB
+  ```
+
+  (`ggml-medium-q5_0.bin` from the same place is a smaller fallback.) `models/` is git-ignored.
 
 ## Setup
 
@@ -39,7 +53,17 @@ Only groups where the configured owner is a member are served; anywhere else the
    find your own user id (e.g. with @userinfobot).
 2. `cp config.example.yaml config.yaml` and set `telegram.token`, `telegram.owner_id` and
    `llm.model`. Every key is documented in the example file. The token can also come from
-   `HOOSHANG_TELEGRAM_TOKEN`.
+   `HOOSHANG_TELEGRAM_TOKEN`. The optional parts live under `features:`: **a feature is on when
+   its section is present**, so comment a section out to turn the feature off (`enabled: false`
+   inside it works too and keeps its settings). The features are `profiles`, `group_memory`,
+   `glossary`, `media`, `faal`, `poem`, `roast` and `voice`. The old top-level `memory:`,
+   `group_memory:`, `glossary:`, `media:` and `faal:` sections are rejected with a message saying
+   where they moved; the Nastaliq `font` and `shaper` are now under `nastaliq:`.
+   Check the result before starting:
+
+   ```sh
+   go run ./cmd/hooshang -check -config config.yaml   # validates, lists the features that are on and the tools they found
+   ```
 3. Add the bot to your group, and make it an **admin** so Telegram delivers reactions (group memory
    and the engagement scores depend on them).
 4. Run it:
@@ -88,7 +112,7 @@ instructions more reliably); all user-facing text is in `internal/i18n/fa.go`.
 The faal and poem cards embed [Gulzar](https://github.com/googlefonts/Gulzar) and
 [Noto Nastaliq Urdu](https://github.com/notofonts/nastaliq), both under the SIL Open Font License
 (license files next to them in `internal/faalimg/fonts/`). Any other Nastaliq `.ttf` can be set
-with `faal.font`.
+with `nastaliq.font`.
 
 ## License
 

@@ -325,14 +325,14 @@ func TestMemoryUpdateWiring(t *testing.T) {
 	_, _ = db.UpdateMember(testChat, ali.ID, func(m *store.Member) {
 		m.Profile.Facts = []store.Item{{Text: "اهل تبریز", Locked: true}}
 	})
-	for i := 1; i <= b.deps.Cfg.Memory.UpdateEvery; i++ {
+	for i := 1; i <= b.deps.Cfg.Features.Profiles.UpdateEvery; i++ {
 		b.handleMessage(context.Background(), &telego.Message{
 			MessageID: i, Chat: telego.Chat{ID: testChat, Type: "supergroup"}, From: ali,
 			Text: "پیام شماره " + string(rune('0'+i%10)), Date: time.Now().Unix(),
 		})
 	}
 	if n := upd.QueueLen(); n != 1 {
-		t.Fatalf("queue = %d after %d messages, want 1", n, b.deps.Cfg.Memory.UpdateEvery)
+		t.Fatalf("queue = %d after %d messages, want 1", n, b.deps.Cfg.Features.Profiles.UpdateEvery)
 	}
 	if err := upd.UpdateNow(context.Background(), testChat, ali.ID); err != nil {
 		t.Fatal(err)

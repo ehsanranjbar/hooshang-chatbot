@@ -18,6 +18,7 @@ import (
 	"github.com/ehsanranjbar/hooshang/internal/memory"
 	"github.com/ehsanranjbar/hooshang/internal/ratelimit"
 	"github.com/ehsanranjbar/hooshang/internal/store"
+	"github.com/ehsanranjbar/hooshang/internal/transcribe"
 )
 
 // Deps are the bot's dependencies.
@@ -29,7 +30,10 @@ type Deps struct {
 	Ganjoor *ganjoor.Client
 	Limiter *ratelimit.Limiter
 	Admins  auth.Admins
-	Memory  *memory.Updater
+	Memory  *memory.Updater // nil when neither profiles nor group_memory is on
+	// Transcriber turns voice messages into text; nil = no transcription, even
+	// when features.voice is on (main leaves it nil when whisper is missing).
+	Transcriber transcribe.Transcriber
 	// FaalImage and PoemImage render the faal ghazal and the /poem بیت as a
 	// Nastaliq image (usually the same renderer); nil sends text.
 	FaalImage *faalimg.Renderer
@@ -44,7 +48,8 @@ type Bot struct {
 	botUsername string
 	workers     *workers
 	rollFn      func() float64 // nil = math/rand; DumpPrompt pins it
-	describer   *describer     // background media descriptions; nil until Run
+	describer   *enricher      // background media descriptions; nil until Run (and without features.media)
+	transcriber *enricher      // background voice transcriptions; nil until Run (and without features.voice)
 	ffOnce      sync.Once      // resolves ffmpeg and ffprobe on first use
 	ffmpeg      string         // "" = not installed
 	ffprobe     string
@@ -95,15 +100,27 @@ func (b *Bot) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	dctx, stopDescriber := context.WithCancel(ctx)
-	b.describer = newDescriber(b)
-	go b.describer.run(dctx)
+	ectx, stopEnrichers := context.WithCancel(ctx)
+	var enrichers []*enricher
+	if b.deps.Cfg.Features.Media.On() {
+		b.describer = newDescriber(b)
+		enrichers = append(enrichers, b.describer)
+	}
+	if b.voiceOn() {
+		b.transcriber = newTranscriber(b)
+		enrichers = append(enrichers, b.transcriber)
+	}
+	for _, e := range enrichers {
+		go e.run(ectx)
+	}
 	shutdown := func() {
 		b.workers.stop(workerStopTimeout)
-		stopDescriber()
-		select { // the DB closes after Run returns
-		case <-b.describer.done:
-		case <-time.After(workerStopTimeout):
+		stopEnrichers()
+		for _, e := range enrichers {
+			select { // the DB closes after Run returns
+			case <-e.done:
+			case <-time.After(workerStopTimeout):
+			}
 		}
 	}
 	for {
@@ -204,6 +221,19 @@ func (b *Bot) handleMessage(ctx context.Context, m *telego.Message) {
 
 	// 5. Memory update trigger.
 	b.maybeEnqueueMemory(chat.ID, m.From.ID)
+	if ref, ok := b.voiceRefOf(m); ok {
+		switch {
+		case stale: // stored and transcribed like any other, never answered
+			b.transcribeIncoming(m, ref, false)
+		case !b.addressed(m, ""):
+			// Whether it is for the bot is known once it is transcribed, and the
+			// answer is decided then. (A voice that is a reply to the bot is
+			// addressed already: runReply transcribes it first.)
+			if b.transcribeIncoming(m, ref, true) {
+				return
+			}
+		}
+	}
 	if stale {
 		return
 	}
@@ -215,8 +245,30 @@ func (b *Bot) handleMessage(ctx context.Context, m *telego.Message) {
 	}
 
 	// 7. Reply or spontaneous.
-	private := chat.Type == "private"
+	b.replyOrSpontaneous(m, "")
+}
+
+// addressed reports whether a message is a direct request to the bot. For a
+// voice message, transcript is what was said: its words are checked as if
+// they had been typed.
+func (b *Bot) addressed(m *telego.Message, transcript string) bool {
+	private := m.Chat.Type == "private"
 	if IsAddressed(m, b.botID, b.botUsername, b.names(), private) {
+		return true
+	}
+	if transcript == "" {
+		return false
+	}
+	typed := *m
+	typed.Text, typed.Entities = transcript, nil
+	return IsAddressed(&typed, b.botID, b.botUsername, b.names(), private)
+}
+
+// replyOrSpontaneous is step 7: queue a reply when the message addresses the
+// bot, else maybe a reaction or a spontaneous message.
+func (b *Bot) replyOrSpontaneous(m *telego.Message, transcript string) {
+	chat := m.Chat
+	if b.addressed(m, transcript) {
 		b.enqueueReply(job{kind: jobReply, chatID: chat.ID, msg: m})
 		return
 	}
@@ -276,21 +328,25 @@ func (b *Bot) storeIncoming(m *telego.Message, text string) {
 	})
 }
 
-// maybeEnqueueMemory enqueues a memory update when the §3.9 condition holds.
+// maybeEnqueueMemory enqueues a group or profile memory update when the §3.9
+// condition holds; each only while its feature is on.
 func (b *Bot) maybeEnqueueMemory(chatID, userID int64) {
 	if b.deps.Memory == nil {
 		return
 	}
-	if g := b.deps.Cfg.GroupMemory; g.Enabled {
+	if g := b.deps.Cfg.Features.GroupMemory; g.On() {
 		if c, err := b.deps.DB.GetChat(chatID); err == nil && c.MsgsSinceGroupUpdate >= g.UpdateEvery {
 			b.deps.Memory.EnqueueGroup(chatID)
 		}
+	}
+	cfg := b.deps.Cfg.Features.Profiles
+	if !cfg.On() {
+		return
 	}
 	mem, err := b.deps.DB.GetMember(chatID, userID)
 	if err != nil {
 		return
 	}
-	cfg := b.deps.Cfg.Memory
 	if mem.MsgsSinceUpdate >= cfg.UpdateEvery {
 		b.deps.Memory.Enqueue(chatID, userID)
 		return

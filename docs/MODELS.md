@@ -113,7 +113,7 @@ Raw output in [`bench/round8.md`](bench/round8.md) and [`bench/round8b.md`](benc
 ### Round 9: media descriptions (Gemma)
 
 Raw output in [`bench/round9.md`](bench/round9.md). A 320 px image of a faal card, described with
-`media.words: 30`: 3/3 in Persian, 18–30 words, 11–24s («تصویری با پس‌زمینه کرم و کادر ساده که
+`features.media.words: 30`: 3/3 in Persian, 18–30 words, 11–24s («تصویری با پس‌زمینه کرم و کادر ساده که
 شامل اشعار فارسی با خط نستعلیق از حافظ است»). It reads text in images only roughly («قال حافظ»).
 
 `ask_picture` ([`bench/round9b.md`](bench/round9b.md)): a reply «تو این عکس چی نوشته؟ بالاش چیه؟»

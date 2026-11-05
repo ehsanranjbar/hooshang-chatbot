@@ -61,6 +61,9 @@ const NoTerms = "هنوز هیچ اصطلاحی یادم ندادین. مثلا�
 // TermsHeader heads the /terms list.
 const TermsHeader = "📖 اصطلاحات گروه:"
 
+// FeatureOff is sent when a command's feature is switched off in the config.
+const FeatureOff = "این قابلیت الان خاموشه 🙈"
+
 // NothingYet is sent for /me when the member has no profile.
 const NothingYet = "هنوز چیز زیادی ازت نمی‌دونم؛ یه کم بیشتر گپ بزنیم 🌱"
 

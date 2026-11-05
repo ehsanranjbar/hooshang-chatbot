@@ -108,7 +108,10 @@ func faalCaption(p *ganjoor.Poem) string {
 func (b *Bot) runFaalTabir(ctx context.Context, chatID int64, askerID int64, poem *ganjoor.Poem, wish string) string {
 	profile, asker := "", ""
 	if mem, err := b.deps.DB.GetMember(chatID, askerID); err == nil && mem != nil {
-		profile, asker = memory.Render(mem.Profile), displayName(mem)
+		asker = displayName(mem)
+		if b.deps.Cfg.Features.Profiles.On() {
+			profile = memory.Render(mem.Profile)
+		}
 	}
 	sys, _ := prompts.System(prompts.SystemData{
 		Name:     b.deps.Cfg.Bot.Name,

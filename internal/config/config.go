@@ -3,7 +3,10 @@
 package config
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -47,42 +50,14 @@ type Config struct {
 			ChatPerMinute   int `yaml:"chat_per_minute"`
 		} `yaml:"rate_limit"`
 	} `yaml:"bot"`
-	Memory struct {
-		UpdateEvery     int           `yaml:"update_every"`
-		MaxAge          time.Duration `yaml:"max_age"`
-		ContextMessages int           `yaml:"context_messages"`
-		MaxItems        int           `yaml:"max_items"`
-	} `yaml:"memory"`
-	GroupMemory struct {
-		Enabled      bool          `yaml:"enabled"`       // default true
-		TTL          time.Duration `yaml:"ttl"`           // an event is forgotten this long after it was last seen; default 168h
-		MaxItems     int           `yaml:"max_items"`     // kept per group, highest engagement first; default 15
-		UpdateEvery  int           `yaml:"update_every"`  // group messages between updates; default 50
-		InPrompt     int           `yaml:"in_prompt"`     // events shown in a prompt; default 4
-		PromptChance float64       `yaml:"prompt_chance"` // chance they are shown in a reply or spontaneous message; default 0.3
-	} `yaml:"group_memory"`
-	Glossary struct {
-		Enabled  bool `yaml:"enabled"`   // default true
-		MaxItems int  `yaml:"max_items"` // terms kept per group; the least recently used is dropped; default 100
-		InPrompt int  `yaml:"in_prompt"` // terms that appear in the conversation shown to the model; default 8
-	} `yaml:"glossary"`
-	Media struct {
-		Enabled  bool          `yaml:"enabled"`   // describe photos, stickers and GIFs with the (vision) model; default true
-		Photos   bool          `yaml:"photos"`    // default true
-		Stickers bool          `yaml:"stickers"`  // default true
-		GIFs     bool          `yaml:"gifs"`      // default true
-		Words    int           `yaml:"words"`     // description length in words; default 30
-		CacheTTL time.Duration `yaml:"cache_ttl"` // how long sticker/GIF descriptions are reused; default 2160h (90 days)
-		MaxQueue int           `yaml:"max_queue"` // pending descriptions; more are skipped; default 20
-		Frames   int           `yaml:"frames"`    // frames sent for an animated sticker or GIF (1 = thumbnail only); needs ffmpeg; default 3
-		FFmpeg   string        `yaml:"ffmpeg"`    // path to ffmpeg; empty = look it up in PATH (optional: without it the thumbnail is used)
-	} `yaml:"media"`
-	Faal struct {
-		Image      bool   `yaml:"image"`       // send the faal ghazal as a Nastaliq image; default true
-		PoemImages bool   `yaml:"poem_images"` // send /poem's بیت as the same image; default true
-		Font       string `yaml:"font"`        // a Nastaliq .ttf; empty = embedded Gulzar (HarfBuzz) or Noto Nastaliq Urdu (go-text)
-		Shaper     string `yaml:"shaper"`      // auto (HarfBuzz's hb-shape if installed, else go-text), harfbuzz, go
-	} `yaml:"faal"`
+	// Features are the optional capabilities. A feature is on when its section
+	// is present (and not "enabled: false"); see Features.
+	Features Features `yaml:"features"`
+	// Nastaliq are the rendering settings shared by the faal and poem cards.
+	Nastaliq struct {
+		Font   string `yaml:"font"`   // a Nastaliq .ttf; empty = embedded Gulzar (HarfBuzz) or Noto Nastaliq Urdu (go-text)
+		Shaper string `yaml:"shaper"` // auto (HarfBuzz's hb-shape if installed, else go-text), harfbuzz, go
+	} `yaml:"nastaliq"`
 	Storage struct {
 		Path string `yaml:"path"` // default ./data
 	} `yaml:"storage"`
@@ -113,42 +88,35 @@ func defaults() *Config {
 	c.Bot.Modes = map[string]int{"joke": 3, "tease": 3, "flirt": 1, "compliment": 2, "comment": 2}
 	c.Bot.RateLimit.GlobalPerMinute = 10
 	c.Bot.RateLimit.ChatPerMinute = 6
-	c.Memory.UpdateEvery = 15
-	c.Memory.MaxAge = 24 * time.Hour
-	c.Memory.ContextMessages = 150
-	c.Memory.MaxItems = 10
-	c.GroupMemory.Enabled = true
-	c.GroupMemory.TTL = 7 * 24 * time.Hour
-	c.GroupMemory.MaxItems = 15
-	c.GroupMemory.UpdateEvery = 50
-	c.GroupMemory.InPrompt = 4
-	c.GroupMemory.PromptChance = 0.3
 	c.Bot.ReactionChance = 0.15
 	c.Bot.ReactionCooldown = time.Minute
-	c.Glossary.Enabled = true
-	c.Glossary.MaxItems = 100
-	c.Glossary.InPrompt = 8
-	c.Media.Enabled, c.Media.Photos, c.Media.Stickers, c.Media.GIFs = true, true, true, true
-	c.Media.Words = 30
-	c.Media.CacheTTL = 90 * 24 * time.Hour
-	c.Media.MaxQueue = 20
-	c.Media.Frames = 3
-	c.Faal.Image = true
-	c.Faal.PoemImages = true
-	c.Faal.Shaper = "auto"
+	c.Nastaliq.Shaper = "auto"
 	c.Storage.Path = "./data"
 	return c
 }
 
 // Load reads the YAML file at path on top of the defaults, applies
-// environment overrides, and validates the result.
+// environment overrides, and validates the result. Unknown keys are an error,
+// and so are the top-level sections that moved under features.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
+	var root yaml.Node
+	if err := yaml.Unmarshal(data, &root); err != nil {
+		return nil, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	if err := checkMovedKeys(&root); err != nil {
+		return nil, fmt.Errorf("config %s: %w", path, err)
+	}
 	c := defaults()
-	if err := yaml.Unmarshal(data, c); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(c); err != nil && !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	if err := c.Features.fillEmpty(emptySections(&root, "features")); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	if c.LLM.MemoryModel == "" {
@@ -228,37 +196,13 @@ func (c *Config) Validate() error {
 	if c.Bot.RateLimit.ChatPerMinute < 1 {
 		return fmt.Errorf("bot.rate_limit.chat_per_minute must be >= 1, got %d", c.Bot.RateLimit.ChatPerMinute)
 	}
-	if c.Memory.UpdateEvery < 1 {
-		return fmt.Errorf("memory.update_every must be >= 1, got %d", c.Memory.UpdateEvery)
-	}
-	if c.Memory.MaxAge <= 0 {
-		return fmt.Errorf("memory.max_age must be > 0")
-	}
-	if c.Memory.ContextMessages < 1 {
-		return fmt.Errorf("memory.context_messages must be >= 1, got %d", c.Memory.ContextMessages)
-	}
-	if g := c.GroupMemory; g.Enabled && (g.TTL <= 0 || g.MaxItems < 1 || g.UpdateEvery < 1 || g.InPrompt < 0 || g.PromptChance < 0 || g.PromptChance > 1) {
-		return fmt.Errorf("group_memory: ttl must be > 0, max_items and update_every >= 1, in_prompt >= 0, prompt_chance in [0, 1]")
-	}
-	if g := c.Glossary; g.Enabled && (g.MaxItems < 1 || g.InPrompt < 1) {
-		return fmt.Errorf("glossary: max_items and in_prompt must be >= 1")
-	}
-	if m := c.Media; m.Enabled && (m.Words < 5 || m.Words > 200 || m.CacheTTL <= 0 || m.MaxQueue < 1) {
-		return fmt.Errorf("media: words must be in [5, 200], cache_ttl > 0, max_queue >= 1")
-	}
-	if m := c.Media; m.Enabled && (m.Frames < 1 || m.Frames > 8) {
-		return fmt.Errorf("media: frames must be in [1, 8]")
-	}
 	if c.Bot.ReactionChance < 0 || c.Bot.ReactionChance > 1 || c.Bot.ReactionCooldown < 0 {
 		return fmt.Errorf("bot.reaction_chance must be in [0, 1] and reaction_cooldown >= 0")
 	}
-	switch c.Faal.Shaper {
+	switch c.Nastaliq.Shaper {
 	case "auto", "harfbuzz", "go":
 	default:
-		return fmt.Errorf("faal.shaper must be auto, harfbuzz or go, got %q", c.Faal.Shaper)
+		return fmt.Errorf("nastaliq.shaper must be auto, harfbuzz or go, got %q", c.Nastaliq.Shaper)
 	}
-	if c.Memory.MaxItems < 1 {
-		return fmt.Errorf("memory.max_items must be >= 1, got %d", c.Memory.MaxItems)
-	}
-	return nil
+	return c.Features.validate()
 }

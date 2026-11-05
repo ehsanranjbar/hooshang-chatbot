@@ -9,14 +9,14 @@ import (
 
 	"github.com/mymmrac/telego"
 
+	"github.com/ehsanranjbar/hooshang/internal/config"
 	"github.com/ehsanranjbar/hooshang/internal/llm"
 	"github.com/ehsanranjbar/hooshang/internal/store"
 )
 
 func enableMedia(b *Bot) {
-	c := &b.deps.Cfg.Media
-	c.Enabled, c.Photos, c.Stickers, c.GIFs = true, true, true, true
-	c.Words, c.CacheTTL, c.MaxQueue = 30, 24*time.Hour, 5
+	b.deps.Cfg.Features.Media = &config.MediaFeature{Enabled: true, Photos: true, Stickers: true, GIFs: true, Send: true,
+		Words: 30, CacheTTL: 24 * time.Hour, MaxQueue: 5, Frames: 1}
 }
 
 // receive stores an incoming message the way handleMessage does, without
@@ -106,7 +106,7 @@ func TestMediaRefs(t *testing.T) {
 	if !ok || ref.fileID != "thumb" || ref.uniqueID != "g" {
 		t.Errorf("GIF ref = %+v", ref)
 	}
-	b.deps.Cfg.Media.GIFs = false
+	b.deps.Cfg.Features.Media.GIFs = false
 	if _, ok := b.mediaRefOf(&telego.Message{Animation: &telego.Animation{Thumbnail: thumb}}); ok {
 		t.Error("GIFs are off but got a ref")
 	}

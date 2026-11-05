@@ -21,26 +21,26 @@ func (b *Bot) toolsFor(j job) ([]llm.Tool, map[string]llm.ToolFunc) {
 	if !b.deps.Cfg.LLM.Tools {
 		return nil, nil
 	}
-	tools := []llm.Tool{
-		{Name: "hafez_faal", Description: "Draw a Hafez faal (a random ghazal, its meaning and an interpretation are sent to the chat). Call it ONLY when someone explicitly asks for a faal (فال، فال حافظ); never offer or draw one on your own. Optional wish (نیت) in Persian.",
-			Parameters: json.RawMessage(`{"type":"object","properties":{"wish":{"type":"string","description":"the optional wish (نیت)"}}}`)},
-		{Name: "random_poem", Description: "Send a random poem by a Persian poet to the chat. Call it ONLY when someone explicitly asks for a poem (شعر); never on your own. Optional poet name.",
-			Parameters: json.RawMessage(`{"type":"object","properties":{"poet":{"type":"string","description":"poet name, e.g. حافظ; empty for a random poet"}}}`)},
+	var tools []llm.Tool
+	handlers := map[string]llm.ToolFunc{}
+	if b.deps.Cfg.Features.Faal.On() {
+		tools = append(tools, hafezFaalTool())
+		handlers["hafez_faal"] = b.toolFaal(j)
 	}
-	handlers := map[string]llm.ToolFunc{
-		"hafez_faal":  b.toolFaal(j),
-		"random_poem": b.toolPoem(j),
+	if b.deps.Cfg.Features.Poem.On() {
+		tools = append(tools, randomPoemTool())
+		handlers["random_poem"] = b.toolPoem(j)
 	}
 	if j.msg != nil {
 		tools = append(tools, reactTool())
 		handlers["react"] = b.toolReact(j)
 	}
-	if b.deps.Cfg.Media.Enabled && (b.deps.Cfg.Media.Stickers || b.deps.Cfg.Media.GIFs) {
+	if m := b.deps.Cfg.Features.Media; m.On() && m.Send && (m.Stickers || m.GIFs) {
 		tools = append(tools, mediaTools()...)
 		handlers["find_media"] = b.toolFindMedia(j)
 		handlers["send_media"] = b.toolSendMedia(j)
 	}
-	if b.deps.Cfg.Glossary.Enabled && j.authorID() > 0 {
+	if b.deps.Cfg.Features.Glossary.On() && j.authorID() > 0 {
 		tools = append(tools,
 			llm.Tool{Name: "learn_term", Description: "Save a local word, phrase or inside joke (اصطلاح) of this group and what it means. Call it ONLY when someone explicitly explains or corrects what a term means (e.g. «\"چاییدن\" یعنی سرما خوردن», «به این میگیم ...»). Not for facts about a person, and not for normal words everyone knows.",
 				Parameters: json.RawMessage(`{"type":"object","properties":{"term":{"type":"string","description":"the term, as written in the chat"},"meaning":{"type":"string","description":"what it means, one short Persian line"}},"required":["term","meaning"]}`)},
@@ -50,7 +50,7 @@ func (b *Bot) toolsFor(j job) ([]llm.Tool, map[string]llm.ToolFunc) {
 		handlers["learn_term"] = b.toolLearnTerm(j)
 		handlers["forget_term"] = b.toolForgetTerm(j)
 	}
-	if j.authorID() > 0 && b.deps.Admins.IsAdmin(j.chatID, j.authorID()) {
+	if b.deps.Cfg.Features.Profiles.On() && j.authorID() > 0 && b.deps.Admins.IsAdmin(j.chatID, j.authorID()) {
 		tools = append(tools,
 			llm.Tool{Name: "get_memory", Description: "Show what is remembered about a member.",
 				Parameters: json.RawMessage(`{"type":"object","properties":{"member":{"type":"string"}},"required":["member"]}`)},
@@ -61,6 +61,18 @@ func (b *Bot) toolsFor(j job) ([]llm.Tool, map[string]llm.ToolFunc) {
 		handlers["edit_memory"] = b.toolEditMemory(j)
 	}
 	return tools, handlers
+}
+
+// hafezFaalTool is the hafez_faal tool definition.
+func hafezFaalTool() llm.Tool {
+	return llm.Tool{Name: "hafez_faal", Description: "Draw a Hafez faal (a random ghazal, its meaning and an interpretation are sent to the chat). Call it ONLY when someone explicitly asks for a faal (فال، فال حافظ); never offer or draw one on your own. Optional wish (نیت) in Persian.",
+		Parameters: json.RawMessage(`{"type":"object","properties":{"wish":{"type":"string","description":"the optional wish (نیت)"}}}`)}
+}
+
+// randomPoemTool is the random_poem tool definition.
+func randomPoemTool() llm.Tool {
+	return llm.Tool{Name: "random_poem", Description: "Send a random poem by a Persian poet to the chat. Call it ONLY when someone explicitly asks for a poem (شعر); never on your own. Optional poet name.",
+		Parameters: json.RawMessage(`{"type":"object","properties":{"poet":{"type":"string","description":"poet name, e.g. حافظ; empty for a random poet"}}}`)}
 }
 
 // toolFaal is the hafez_faal tool handler.
@@ -187,7 +199,7 @@ func (b *Bot) toolLearnTerm(j job) llm.ToolFunc {
 		}
 		_, err := b.deps.DB.PutTerm(j.chatID, store.Term{
 			Term: a.Term, Meaning: a.Meaning, ByID: j.authorID(), ByName: name,
-		}, b.deps.Cfg.Glossary.MaxItems)
+		}, b.deps.Cfg.Features.Glossary.MaxItems)
 		if err != nil {
 			return "error: " + err.Error(), nil
 		}

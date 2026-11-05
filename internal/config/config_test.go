@@ -3,6 +3,8 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -91,18 +93,12 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	if c.Bot.RateLimit.GlobalPerMinute != 10 || c.Bot.RateLimit.ChatPerMinute != 6 {
 		t.Errorf("RateLimit = %+v", c.Bot.RateLimit)
 	}
-	// Memory defaults
-	if c.Memory.UpdateEvery != 15 {
-		t.Errorf("UpdateEvery = %d", c.Memory.UpdateEvery)
+	// Every feature is off until its section is present.
+	if on := c.Features.Active(); len(on) != 0 {
+		t.Errorf("features on by default: %v", on)
 	}
-	if c.Memory.MaxAge != 24*time.Hour {
-		t.Errorf("MaxAge = %v", c.Memory.MaxAge)
-	}
-	if c.Memory.ContextMessages != 150 {
-		t.Errorf("ContextMessages = %d", c.Memory.ContextMessages)
-	}
-	if c.Memory.MaxItems != 10 {
-		t.Errorf("MaxItems = %d", c.Memory.MaxItems)
+	if c.Nastaliq.Shaper != "auto" || c.Nastaliq.Font != "" {
+		t.Errorf("Nastaliq = %+v", c.Nastaliq)
 	}
 	// Storage default
 	if c.Storage.Path != "./data" {
@@ -138,11 +134,12 @@ bot:
   rate_limit:
     global_per_minute: 1
     chat_per_minute: 1
-memory:
-  update_every: 3
-  max_age: 1h
-  context_messages: 10
-  max_items: 2
+features:
+  profiles:
+    update_every: 3
+    max_age: 1h
+    context_messages: 10
+    max_items: 2
 storage:
   path: "/var/lib/hooshang"
 `
@@ -179,9 +176,9 @@ storage:
 	if c.Bot.RateLimit.GlobalPerMinute != 1 || c.Bot.RateLimit.ChatPerMinute != 1 {
 		t.Errorf("RateLimit = %+v", c.Bot.RateLimit)
 	}
-	if c.Memory.UpdateEvery != 3 || c.Memory.MaxAge != time.Hour ||
-		c.Memory.ContextMessages != 10 || c.Memory.MaxItems != 2 {
-		t.Errorf("Memory = %+v", c.Memory)
+	if p := c.Features.Profiles; !p.On() || p.UpdateEvery != 3 || p.MaxAge != time.Hour ||
+		p.ContextMessages != 10 || p.MaxItems != 2 {
+		t.Errorf("Profiles = %+v", p)
 	}
 	if c.Storage.Path != "/var/lib/hooshang" {
 		t.Errorf("Storage.Path = %q", c.Storage.Path)
@@ -340,24 +337,38 @@ func TestValidateBadRanges(t *testing.T) {
 	}
 
 	c = clone(valid)
-	c.Memory.MaxItems = -1
+	c.Features.Profiles = &ProfilesFeature{Enabled: true, UpdateEvery: 15, MaxAge: time.Hour, ContextMessages: 150, MaxItems: -1}
 	if err := c.Validate(); err == nil {
 		t.Error("negative max_items: want error")
 	}
 }
 
 func TestLoadExampleFile(t *testing.T) {
-	// The bundled example must parse, and after an env token it must validate.
-	if err := os.Setenv("HOOSHANG_TELEGRAM_TOKEN", "1:FAKE"); err != nil {
+	// The bundled example must parse with every feature on, and after an env
+	// token it must validate. Its model file is git-ignored: point it at a stand-in.
+	t.Setenv("HOOSHANG_TELEGRAM_TOKEN", "1:FAKE")
+	example, err := os.ReadFile("../../config.example.yaml")
+	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Unsetenv("HOOSHANG_TELEGRAM_TOKEN")
-	c, err := Load("../../config.example.yaml")
+	model := filepath.Join(t.TempDir(), "model.bin")
+	if err := os.WriteFile(model, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	yamlText := strings.Replace(string(example), "models/ggml-large-v3-turbo-q5_0.bin", model, 1)
+	if yamlText == string(example) {
+		t.Fatal("the example no longer names models/ggml-large-v3-turbo-q5_0.bin")
+	}
+	c, err := Load(writeConfig(t, yamlText))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if c.LLM.MaxTokens != 4096 || c.Bot.HistoryMessages != 15 || c.Bot.HistoryWindow != 20*time.Minute || c.Bot.Name != "هوشنگ" {
 		t.Errorf("example values off: %+v / %+v", c.LLM, c.Bot)
+	}
+	want := []string{"profiles", "group_memory", "glossary", "media", "faal", "poem", "roast", "voice"}
+	if got := c.Features.Active(); !reflect.DeepEqual(got, want) {
+		t.Errorf("features on in the example = %v, want %v", got, want)
 	}
 }
 
@@ -384,46 +395,46 @@ func TestProfileBudgetRange(t *testing.T) {
 }
 
 func TestGroupMemoryDefaultsAndValidation(t *testing.T) {
-	c, err := Load(writeConfig(t, minimal))
+	c, err := Load(writeConfig(t, minimal+"features:\n  group_memory:\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	g := c.GroupMemory
-	if !g.Enabled || g.TTL != 7*24*time.Hour || g.MaxItems != 15 || g.UpdateEvery != 50 || g.InPrompt != 4 || g.PromptChance != 0.3 {
+	g := c.Features.GroupMemory
+	if !g.On() || g.TTL != 7*24*time.Hour || g.MaxItems != 15 || g.UpdateEvery != 50 || g.InPrompt != 4 || g.PromptChance != 0.3 {
 		t.Fatalf("defaults = %+v", g)
 	}
-	if _, err := Load(writeConfig(t, minimal+"group_memory:\n  ttl: 0s\n")); err == nil {
+	if _, err := Load(writeConfig(t, minimal+"features:\n  group_memory:\n    ttl: 0s\n")); err == nil {
 		t.Fatal("ttl 0 accepted")
 	}
-	if _, err := Load(writeConfig(t, minimal+"group_memory:\n  enabled: false\n  ttl: 0s\n")); err != nil {
+	if _, err := Load(writeConfig(t, minimal+"features:\n  group_memory:\n    enabled: false\n    ttl: 0s\n")); err != nil {
 		t.Fatalf("a disabled group memory is not validated: %v", err)
 	}
 }
 
 func TestShaperIsValidated(t *testing.T) {
-	if _, err := Load(writeConfig(t, minimal+"faal:\n  shaper: harfbuz\n")); err == nil {
+	if _, err := Load(writeConfig(t, minimal+"nastaliq:\n  shaper: harfbuz\n")); err == nil {
 		t.Fatal("shaper 'harfbuz' accepted")
 	}
 }
 
 func TestMediaFramesBounds(t *testing.T) {
-	c, err := Load(writeConfig(t, minimal))
-	if err != nil || c.Media.Frames != 3 || c.Media.FFmpeg != "" {
-		t.Fatalf("defaults: frames %d, ffmpeg %q, err %v", c.Media.Frames, c.Media.FFmpeg, err)
+	c, err := Load(writeConfig(t, minimal+"features:\n  media:\n"))
+	if err != nil || c.Features.Media.Frames != 3 || c.Features.Media.FFmpeg != "" || !c.Features.Media.Send {
+		t.Fatalf("defaults: %+v, err %v", c.Features.Media, err)
 	}
 	for _, tc := range []struct {
 		yaml string
 		ok   bool
 	}{
-		{"media:\n  frames: 1\n", true},
-		{"media:\n  frames: 8\n", true},
-		{"media:\n  frames: 0\n", false},
-		{"media:\n  frames: 9\n", false},
-		{"media:\n  frames: -1\n", false},
-		{"media:\n  enabled: false\n  frames: 0\n", true},
-		{"media:\n  ffmpeg: /nonexistent/ffmpeg\n", true}, // existence is not checked: the bot runs without it
+		{"media:\n    frames: 1\n", true},
+		{"media:\n    frames: 8\n", true},
+		{"media:\n    frames: 0\n", false},
+		{"media:\n    frames: 9\n", false},
+		{"media:\n    frames: -1\n", false},
+		{"media:\n    enabled: false\n    frames: 0\n", true},
+		{"media:\n    ffmpeg: /nonexistent/ffmpeg\n", true}, // existence is not checked: the bot runs without it
 	} {
-		if _, err := Load(writeConfig(t, minimal+tc.yaml)); (err == nil) != tc.ok {
+		if _, err := Load(writeConfig(t, minimal+"features:\n  "+tc.yaml)); (err == nil) != tc.ok {
 			t.Errorf("%q: err = %v, want ok=%v", tc.yaml, err, tc.ok)
 		}
 	}

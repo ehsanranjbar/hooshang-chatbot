@@ -39,10 +39,10 @@ func newTestConfig() *config.Config {
 	cfg.Bot.Modes = map[string]int{"joke": 3, "tease": 3, "flirt": 1, "compliment": 2, "comment": 2}
 	cfg.Bot.RateLimit.GlobalPerMinute = 1000
 	cfg.Bot.RateLimit.ChatPerMinute = 1000
-	cfg.Memory.UpdateEvery = 15
-	cfg.Memory.MaxAge = 24 * time.Hour
-	cfg.Memory.ContextMessages = 150
-	cfg.Memory.MaxItems = 10
+	cfg.Features.Profiles = &config.ProfilesFeature{Enabled: true, UpdateEvery: 15, MaxAge: 24 * time.Hour, ContextMessages: 150, MaxItems: 10}
+	cfg.Features.Faal = &config.FaalFeature{Enabled: true}
+	cfg.Features.Poem = &config.PoemFeature{Enabled: true}
+	cfg.Features.Roast = &config.RoastFeature{Enabled: true}
 	cfg.Storage.Path = "./data"
 	return cfg
 }

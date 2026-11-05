@@ -70,7 +70,7 @@ func TestVideoStickerIsDescribedFromFrames(t *testing.T) {
 	clip, thumb := clipFixture(t)
 	b, db, tg, fake := replyBot(t, 10, llm.Response{Content: "گربه‌ای که می‌رقصد"})
 	enableMedia(b)
-	b.deps.Cfg.Media.Frames = 3
+	b.deps.Cfg.Features.Media.Frames = 3
 	tg.serveFiles(t, map[string][]byte{"clip": clip, "thumb": thumb})
 	sticker := &telego.Sticker{FileID: "clip", FileUniqueID: "u-clip", Emoji: "😂", IsVideo: true, Thumbnail: &telego.PhotoSize{FileID: "thumb"}}
 	m := mediaMsg(1, sara, func(m *telego.Message) { m.Sticker = sticker })
@@ -105,8 +105,8 @@ func TestMissingFFmpegFallsBackToTheThumbnail(t *testing.T) {
 	clip, thumb := clipFixture(t)
 	b, db, tg, fake := replyBot(t, 10, llm.Response{Content: "گربه‌ای که می‌رقصد"})
 	enableMedia(b)
-	b.deps.Cfg.Media.Frames = 3
-	b.deps.Cfg.Media.FFmpeg = "/nonexistent/ffmpeg"
+	b.deps.Cfg.Features.Media.Frames = 3
+	b.deps.Cfg.Features.Media.FFmpeg = "/nonexistent/ffmpeg"
 	tg.serveFiles(t, map[string][]byte{"clip": clip, "thumb": thumb})
 	sticker := &telego.Sticker{FileID: "clip", FileUniqueID: "u-clip", Emoji: "😂", IsVideo: true, Thumbnail: &telego.PhotoSize{FileID: "thumb"}}
 	m := mediaMsg(1, sara, func(m *telego.Message) { m.Sticker = sticker })
@@ -130,7 +130,7 @@ func TestGIFWithOneFrameUsesTheThumbnail(t *testing.T) {
 	clip, thumb := clipFixture(t)
 	b, _, tg, fake := replyBot(t, 10, llm.Response{Content: "مردی که چشم می‌چرخاند"})
 	enableMedia(b)
-	b.deps.Cfg.Media.Frames = 1
+	b.deps.Cfg.Features.Media.Frames = 1
 	tg.serveFiles(t, map[string][]byte{"gif": clip, "thumb": thumb})
 	m := mediaMsg(1, sara, func(m *telego.Message) {
 		m.Animation = &telego.Animation{FileID: "gif", FileUniqueID: "u-gif", Thumbnail: &telego.PhotoSize{FileID: "thumb"}}
@@ -167,7 +167,7 @@ func TestReplyAboutAGIFAttachesTheFrames(t *testing.T) {
 		llm.Response{Content: "اول می‌خنده بعد گریه می‌کنه"},
 	)
 	enableMedia(b)
-	b.deps.Cfg.Media.Frames = 3
+	b.deps.Cfg.Features.Media.Frames = 3
 	tg.serveFiles(t, map[string][]byte{"gif": clip, "thumb": thumb})
 	gif := mediaMsg(1, sara, func(m *telego.Message) {
 		m.Animation = &telego.Animation{FileID: "gif", FileUniqueID: "u-gif", Thumbnail: &telego.PhotoSize{FileID: "thumb"}}

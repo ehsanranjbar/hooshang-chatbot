@@ -92,7 +92,7 @@ option and leave a `// NOTE:` comment.
 ```text
 cmd/hooshang/main.go
 config.example.yaml
-internal/config/config.go, config_test.go
+internal/config/config.go, features.go, config_test.go, features_test.go
 internal/llm/client.go, types.go, json.go, tools.go, fake.go, client_test.go, json_test.go, tools_test.go
 internal/store/            DONE: do not change (docs/KVUTIL.md)
 internal/auth/auth.go
@@ -101,6 +101,7 @@ internal/ganjoor/client.go, format.go, poets.go, client_test.go, format_test.go
 internal/memory/profile.go, ops.go, updater.go, profile_test.go, ops_test.go, updater_test.go
 internal/prompts/prompts.go, *.tmpl (embedded), prompts_test.go
 internal/i18n/fa.go
+internal/transcribe/transcribe.go, transcribe_test.go   (whisper.cpp, §6e)
 internal/bot/bot.go, access.go, trigger.go, worker.go, reply.go, tools.go, commands.go, faal.go,
              send.go, telegram.go, trigger_test.go, reply_test.go, commands_test.go
 docs/KVUTIL.md            DONE
@@ -144,26 +145,72 @@ type Config struct {
             ChatPerMinute   int `yaml:"chat_per_minute"`   // default 6
         } `yaml:"rate_limit"`
     } `yaml:"bot"`
-    Memory struct {
-        UpdateEvery     int           `yaml:"update_every"`     // default 15
-        MaxAge          time.Duration `yaml:"max_age"`          // default 24h
-        ContextMessages int           `yaml:"context_messages"` // default 150
-        MaxItems        int           `yaml:"max_items"`        // default 10 per section
-    } `yaml:"memory"`
+    Features Features `yaml:"features"` // the optional capabilities, below
+    Nastaliq struct {
+        Font   string `yaml:"font"`   // a Nastaliq .ttf; empty = embedded fonts
+        Shaper string `yaml:"shaper"` // auto (default), harfbuzz, go
+    } `yaml:"nastaliq"`                // shared by the faal and poem cards
     Storage struct {
         Path string `yaml:"path"` // default ./data
     } `yaml:"storage"`
 }
 
-func Load(path string) (*Config, error) // read YAML → defaults → env overrides → Validate
+func Load(path string) (*Config, error) // read YAML → defaults → strict decode → env overrides → Validate
 func (c *Config) Validate() error       // token, owner_id, model required; ranges checked; mode keys ∈ {joke,tease,flirt,compliment,comment}
 ```
+
+**Features.** Every optional capability lives under `features:`; the rest of the file (`telegram`,
+`llm`, `bot`, `nastaliq`, `storage`) is always on. **A feature is on when its section is present**
+in the file, and off when the section is absent or commented out. Inside a present section,
+`enabled: false` also turns it off (the other keys are kept, and not validated). An empty section
+(`roast:`) is on with all defaults.
+
+```go
+type Features struct {
+    Profiles    *ProfilesFeature    `yaml:"profiles"`     // was memory
+    GroupMemory *GroupMemoryFeature `yaml:"group_memory"`
+    Glossary    *GlossaryFeature    `yaml:"glossary"`
+    Media       *MediaFeature       `yaml:"media"`        // + send
+    Faal        *FaalFeature        `yaml:"faal"`         // enabled, image
+    Poem        *PoemFeature        `yaml:"poem"`         // enabled, image (was faal.poem_images)
+    Roast       *RoastFeature       `yaml:"roast"`        // enabled
+    Voice       *VoiceFeature       `yaml:"voice"`        // §6e
+}
+func (f *FaalFeature) On() bool { return f != nil && f.Enabled } // one per feature; safe on nil
+func (f Features) Active() []string // the names that are on, for /status and -check
+```
+
+Nil pointer = absent section = off. Each feature struct has `UnmarshalYAML(*yaml.Node)` that first
+fills the receiver with the feature's defaults, then decodes the node through a method-less alias
+type, so keys left out keep their default and an explicit `0` stays `0`. `Load` decodes with
+`KnownFields(true)` (a typo is an error; `UnmarshalYAML` checks the keys of its own section, which
+yaml does not), and before that scans the top-level keys: the old `memory`, `group_memory`,
+`glossary`, `media` and `faal` give one error that names the new path of each. Defaults and ranges:
+
+| Feature | Keys (default) |
+|---|---|
+| `profiles` | `update_every` 15, `max_age` 24h, `context_messages` 150, `max_items` 10. Off: no updater jobs, no profiles or orders in prompts, no admin rules, no `get_memory` / `edit_memory`; `/me` and `/forgetme` say it is off |
+| `group_memory` | `ttl` 168h, `max_items` 15, `update_every` 50, `in_prompt` 4, `prompt_chance` 0.3 |
+| `glossary` | `max_items` 100, `in_prompt` 8. Off: no `/terms` (says it is off), no `learn_term` / `forget_term` |
+| `media` | `photos`, `stickers`, `gifs`, `send` (all true), `words` 30, `cache_ttl` 2160h, `max_queue` 20, `frames` 3, `ffmpeg` "". `send` gates `find_media` / `send_media` apart from describing |
+| `faal` | `image` true. Off: `/faal` says it is off, no `hafez_faal` tool (so the «فال» phrase does nothing) |
+| `poem` | `image` true. Off: `/poem` says it is off, no `random_poem` |
+| `roast` | none. Off: `/roast` says it is off |
+| `voice` | `whisper` "", `model` (required), `language` fa, `threads` 0, `max_duration` 120s, `max_queue` 10, `max_words` 120, `video_notes` true. The model file must exist; an `.en` model is refused for a language other than `en` |
+
+`/status` lists the features that are on. `llm.tools` stays the global switch for tool calling.
+`main` builds the Ganjoor client only when faal or poem is on, the card renderer only when an
+`image` is on, the memory updater only when profiles or group_memory is on, and the transcriber
+only when voice is on and whisper-cli, ffmpeg and the model are found (else a warning, and voices
+stay `[ویس]`). `-check` loads and validates the config, prints the features that are on and
+whether the tools they need (ffmpeg, whisper-cli, the model, a Nastaliq shaper) were found, never
+prints the token or API key, and exits 1 on an invalid config or a voice feature that cannot run.
 
 `Load` sets an empty `llm.memory_model` to `llm.model`. Memory calls use the same `max_tokens`,
 `timeout` and `json_schema` as chat, at temperature 0.2.
 
-`config.example.yaml` holds every key with its default and a comment. `main` takes the
-`-config` flag (default `config.yaml`).
+`config.example.yaml` holds every key with its default and a comment, with every feature section
+present. `main` takes the `-config` flag (default `config.yaml`) and `-check`.
 
 ### 3.2 `llm`
 
@@ -326,7 +373,9 @@ type Deps struct {
     Ganjoor *ganjoor.Client
     Limiter *ratelimit.Limiter
     Admins  auth.Admins
-    Memory  *memory.Updater
+    Memory  *memory.Updater   // nil when neither profiles nor group_memory is on
+    Transcriber transcribe.Transcriber // nil = no voice transcription (§6e)
+    FaalImage, PoemImage *faalimg.Renderer // nil = text
 }
 func New(d Deps) (*Bot, error)          // calls GetMe once and keeps the bot's ID and username
 func (b *Bot) Run(ctx context.Context) error
@@ -413,15 +462,15 @@ func (b *Bot) Run(ctx context.Context) error
 | Command | Who | Behavior |
 |---|---|---|
 | `/start`, `/help` | everyone | `i18n.Help` |
-| `/faal [نیت]` | everyone | Faal flow (§8). Reserves 2. |
-| `/poem [شاعر]` | everyone | Poem flow (§8). Reserves 1, or 2 when commented. Unknown poet → `i18n.UnknownPoet` with the poet list. |
-| `/roast` (reply or `@user`) | everyone | Reply job with the task "roast {target} with real bite, and jab the requester". Refused (`i18n.NoTeaseTarget`) if the target has `NoTease`. With no target → `i18n.RoastWho`. |
-| `/terms` | everyone | The glossary (§6b), most recently used first, or `i18n.NoTerms` |
-| `/me` | everyone | `memory.Render` of your own profile, or `i18n.NothingYet` |
+| `/faal [نیت]` | everyone | Faal flow (§8). Reserves 2. `i18n.FeatureOff` when `features.faal` is off. |
+| `/poem [شاعر]` | everyone | (`i18n.FeatureOff` when `features.poem` is off.) Poem flow (§8). Reserves 1, or 2 when commented. Unknown poet → `i18n.UnknownPoet` with the poet list. |
+| `/roast` (reply or `@user`) | everyone | `i18n.FeatureOff` when `features.roast` is off. Else a reply job with the task "roast {target} with real bite, and jab the requester". Refused (`i18n.NoTeaseTarget`) if the target has `NoTease`. With no target → `i18n.RoastWho`. |
+| `/terms` | everyone | The glossary (§6b), most recently used first, or `i18n.NoTerms`; `i18n.FeatureOff` when the glossary is off |
+| `/me` | everyone | `memory.Render` of your own profile, or `i18n.NothingYet`; `i18n.FeatureOff` when profiles are off |
 | `/notease`, `/teaseok` | everyone | Sets `NoTease`; confirms |
-| `/forgetme` | everyone | `DeleteMember`; confirms |
+| `/forgetme` | everyone | `DeleteMember`; confirms (`i18n.FeatureOff` when profiles are off) |
 | `/mute`, `/unmute` | admin | `Chat.Muted` (spontaneous only); confirms |
-| `/status` | admin | Model, limiter free slots, number of workers, updater queue length, member count, last 3 edits |
+| `/status` | admin | Model, limiter free slots, number of workers, updater queue length, member count, the features that are on, the voice queue, last 3 edits |
 
 Non-admins using admin commands: no reply.
 
@@ -488,18 +537,18 @@ transcript shows them: `[استیکر: 😂 — گربه‌ای که از خند
 
 - **What is sent:** a photo's smallest size with a side ≥ 512 px (or the largest); a static
   sticker itself (WEBP → PNG with `x/image/webp`); a TGS (Lottie) sticker's thumbnail. A video
-  sticker (WEBM) or a GIF (MP4) is described from `media.frames` (3) frames: the clip itself is
+  sticker (WEBM) or a GIF (MP4) is described from `features.media.frames` (3) frames: the clip itself is
   downloaded (≤ 20 MB, `maxClipBytes`) to a temp file, ffprobe reads its duration and one ffmpeg
   run (30 s timeout) writes PNG frames at the centres of `frames` equal slices of the clip
   (`select` filter by timestamp, scaled to ≤ 512 px on the longer side); they all go in one
   request (`llm.Message.Images` sends any number as OpenAI content parts) and the prompt says
-  they are frames in order, to describe the motion. ffmpeg is optional (`media.ffmpeg`, else
+  they are frames in order, to describe the motion. ffmpeg is optional (`features.media.ffmpeg`, else
   PATH, resolved once): when it is missing, the clip is too big, or extraction fails or gives
   fewer than 2 frames, the thumbnail (its first frame) is used as before, logged at Debug; a
-  failure here never fails the description. `media.frames: 1` means thumbnail only. Files come
+  failure here never fails the description. `features.media.frames: 1` means thumbnail only. Files come
   from `GetFile` + `FileDownloadURL`; only the text is kept, never the image.
 - **Prompt** (`media_describe.tmpl`): what is in it, any text in it, and for stickers/GIFs the
-  reaction it expresses; never guess who a person is; at most `media.words` (30) words, Persian.
+  reaction it expresses; never guess who a person is; at most `features.media.words` (30) words, Persian.
   `cleanDescription` makes it one line, caps it at words+10, and drops leaked reasoning.
 - **Cache:** sticker and GIF descriptions are stored in the shared `media` store by
   `file_unique_id` (same file → same id in every chat) for `cache_ttl` (90 days), so a repeated
@@ -513,8 +562,9 @@ transcript shows them: `[استیکر: 😂 — گربه‌ای که از خند
   video sticker or GIF, its frames) and attaches it to the reply call, with a note to answer
   whatever specific question is asked about it (the stored description is short). The bot's own
   cards are skipped (their text is in the transcript).
-- Config: `media: {enabled, photos, stickers, gifs, words: 30, cache_ttl: 2160h, max_queue: 20,
-  frames: 3 (1–8), ffmpeg: ""}`. Descriptions cached from one frame age out with `cache_ttl`.
+- Config: `features.media: {photos, stickers, gifs, send, words: 30, cache_ttl: 2160h, max_queue: 20,
+  frames: 3 (1–8), ffmpeg: ""}`. Descriptions cached from one frame age out with `cache_ttl`. The describer
+  is an `enricher` (`enrich.go`): a queue with one goroutine and per-file claims, shared with §6e.
 
 ## 6d. Reactions, stickers and GIFs, backlog
 
@@ -534,7 +584,56 @@ transcript shows them: `[استیکر: 😂 — گربه‌ای که از خند
   `send_media({id})` sends it as a reply (1 limiter slot) and records it in the transcript as
   `[استیکر: 😂 — description]`. Photos are never offered.
 - **Backlog:** messages older than 2 minutes (Telegram redelivers up to 24h after downtime) are
-  stored, counted, and described, but never answered.
+  stored, counted, described and (voice) transcribed, but never answered.
+
+## 6e. Voice transcription
+
+With `features.voice` on, voice messages (OGG/Opus) and, with `video_notes`, round video messages
+are transcribed locally by [whisper.cpp](https://github.com/ggml-org/whisper.cpp) and the text
+goes into the stored message like a media description: `[ویس]` → `[ویس: متن پیاده‌شده]`,
+`[ویدیو مسیج]` → `[ویدیو مسیج: …]` (`describedTag`/`applyDescription`; `Message.Described` marks it
+done), so replies, memory and group events all see what was said. No transcript is cached: voices
+don't repeat.
+
+- **Engine** (`internal/transcribe`): `Transcriber{ Transcribe(ctx, audio []byte, mime string) (string, error) }`;
+  `Whisper` is the implementation and the bot gets it through `Deps.Transcriber` (tests use a fake).
+  `NewWhisper(Options)` resolves `whisper-cli` and `ffmpeg` (a configured path, else PATH);
+  `Check()` reports in one error what is missing (whisper-cli, ffmpeg, the model file), and
+  `Paths()` what was found, for `-check` and the startup log. Per call, under one mutex (one at a
+  time; 5 min timeout): the audio goes to a temp dir, `ffmpeg -vn -ar 16000 -ac 1 -c:a pcm_s16le`
+  makes the WAV (`-vn` drops a video note's picture), and
+  `whisper-cli -m <model> -l <language> -nt -np -sns -f <wav> [-t N]` prints the plain text on
+  stdout; the directory is removed afterwards. `Clean` makes it one line without `[annotations]`
+  (cut to `max_words` words with «…» by the bot, which also turns any `[` `]` into parentheses).
+- **ffmpeg** is `features.media.ffmpeg` when that section sets it (even if media is off, so a path
+  can be kept), else PATH. There is no separate `tools:` section.
+- **Models:** a multilingual ggml model; Persian needs one, so an `.en` model is rejected by
+  validation. Developed against `ggml-large-v3-turbo-q5_0.bin` (about 570 MB, in the git-ignored `models/`).
+  Download: `curl -L -o models/ggml-large-v3-turbo-q5_0.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin`
+  (fallback `ggml-medium-q5_0.bin`, about 540 MB).
+- **Which voices:** only those up to `max_duration` (120 s; longer ones stay `[ویس]`) and 20 MB
+  (`maxClipBytes`). The file comes from `downloadFile`.
+- **When:** the transcriber is a second `enricher` (`enrich.go`, the same queue as the media
+  describer: one background goroutine, `max_queue` 10, extra jobs are skipped, shutdown waits for
+  it). In `handleMessage`, for a voice the bot cannot yet know whether it is addressed:
+  1. *Stale* (backlog): queued for a transcript, never answered.
+  2. *Already addressed* (a reply to the bot, or a private chat): nothing is queued; `runReply`
+     calls `transcribeTrigger` first, which claims the file (or waits for the background worker
+     that has it, like `describeTrigger`) so it is never transcribed twice, and the prompt then
+     has the transcript.
+  3. *Otherwise*: the job is queued with `answer`, and the message returns. When the transcript is
+     in, step 7 runs on it (`replyOrSpontaneous`): `IsAddressed` on the original message **and**
+     on a copy whose text is the transcript (name or alias as a whole word) queues the reply job;
+     if not addressed, the usual reaction and spontaneous rolls happen then. If the queue is full,
+     step 7 runs at once on `[ویس]`. A failed or empty transcription also ends in step 7 (an empty
+     one marks the message done and leaves the tag).
+- Config: `features.voice: {whisper: "", model, language: fa, threads: 0, max_duration: 120s,
+  max_queue: 10, max_words: 120, video_notes: true}`. If whisper-cli, ffmpeg or the model are
+  missing at startup, `main` logs a warning and runs without voice transcription (`-check` exits 1).
+- Tests: a fake `Transcriber` in `internal/bot/voice_test.go` (transcript stored; name in a voice
+  answered, another voice silent; reply to the bot transcribed before the reply; too long left
+  alone; feature off changes nothing; backlog never answered); `internal/transcribe` runs the
+  real `whisper-cli` on a 2 s sine tone when it and the model are installed (else it skips).
 
 ## 6a. Group memory
 
@@ -543,7 +642,7 @@ A short memory of the topics and events **the group** cared about, alongside the
 - **Engagement:** each stored message counts `Reactions` (from `message_reaction` updates, or the
   anonymous `message_reaction_count`; both arrive only while the bot is a group **admin**) and
   `Replies` (incremented when a reply to it is stored). `Engagement = 2·reactions + replies`.
-- **Updates:** `Chat.MsgsSinceGroupUpdate` counts group messages. At `group_memory.update_every` (50)
+- **Updates:** `Chat.MsgsSinceGroupUpdate` counts group messages. At `features.group_memory.update_every` (50)
   the memory updater gets a group job (user 0) and runs `UpdateGroupNow`:
   1. It reads the member messages since `Chat.GroupUpdatedAt` (at least 10, else it resets and waits).
   2. The prompt (`group_extract.tmpl`) has the remembered events with ids, and the new messages as
@@ -566,10 +665,10 @@ The group's own words, phrases and inside jokes, taught by **anyone** in natural
 
 - **Store:** `terms`, keyed by the hash of `store.NormalizeTerm(term)` (ی/ي, ک/ك, ة, tatweel, diacritics,
   ZWNJ → space, case). `Term{Term, Norm, Meaning, ByID, ByName, AddedAt, UsedAt}`.
-- **LRU:** at most `glossary.max_items` (100) per group. A new term in a full glossary evicts the one
+- **LRU:** at most `features.glossary.max_items` (100) per group. A new term in a full glossary evicts the one
   with the oldest `UsedAt`. `UsedAt` is set when a term is taught or re-explained, and whenever it is
   shown to the model.
-- **Tools** (every member, when `glossary.enabled`): `learn_term({term, meaning})` adds or replaces
+- **Tools** (every member, when `features.glossary` is on): `learn_term({term, meaning})` adds or replaces
   (term ≤ 40 runes, meaning cut to 200); `forget_term({term})` only for the admin or whoever taught it.
   The descriptions say: only on an explicit explanation, never for facts about a person.
 - **Use:** the terms whose normalized form appears in the transcript at a word start (suffixes like
@@ -680,13 +779,13 @@ comment for the command; the tool path lets the model add a short line in its no
 
 ### 8a. Faal image (`internal/faalimg`)
 
-With `faal.image` on (the default), message 1 is a **PNG of the ghazal in Nastaliq**: a parchment
+With `features.faal.image` on (the default), message 1 is a **PNG of the ghazal in Nastaliq**: a parchment
 card with the title on top and one بیت per row (first hemistich in the right column, second in the
 left). The font size is fitted so the longest hemistich fits its column. The caption is
 `🔮 فال حافظ — {fullTitle}`, the معنی (cut at a sentence end to stay under Telegram's 1024-character
 limit) and the link. Message 2 is still the تعبیر. If rendering fails, the text message is sent instead.
 
-- **Shaping:** `faal.shaper: auto` (the default) uses HarfBuzz's `hb-shape` CLI when it's installed
+- **Shaping:** `nastaliq.shaper: auto` (the default) uses HarfBuzz's `hb-shape` CLI when it's installed
   (`brew install harfbuzz`, or `apt install libharfbuzz-bin`), else go-text
   (`github.com/go-text/typesetting`). Both select **the same glyphs**; the difference is position:
   go-text doesn't apply cursive-attachment offsets, so without HarfBuzz Nastaliq loses its cascade
@@ -694,9 +793,9 @@ limit) and the link. Message 2 is still the تعبیر. If rendering fails, the 
   against `hb-shape` on a whole ghazal. Rendering is always go-text/render.
 - **Fonts (embedded, OFL):** **Gulzar** is the default with HarfBuzz; every word of the test ghazal
   reads correctly. **Noto Nastaliq Urdu** is the default with go-text, because Gulzar's contextual
-  lookups break in go-text. `faal.font` loads any other `.ttf`. IranNastaliq looks very Iranian
+  lookups break in go-text. `nastaliq.font` loads any other `.ttf`. IranNastaliq looks very Iranian
   but has dot collisions even in HarfBuzz («ننوشته» reads «توشته», «منزل» reads «مترل»).
-- **Poems** (`/poem` and the `random_poem` tool) use the same card when `faal.poem_images` is on
+- **Poems** (`/poem` and the `random_poem` tool) use the same card when `features.poem.image` is on
   (the default): the 2 بیت, the title `{poet} — {title}`, and the caption `— {poet}، {title}` plus the link.
 - Digit runs are reversed before shaping, so numbers read left to right inside the RTL line
   («غزل شمارهٔ ۱۷۶», not «۶۷۱»).
@@ -729,8 +828,7 @@ poem cards) is in and benchmarked (docs/MODELS.md rounds 5–13).
 Open ideas, in order of value: restate the admin's orders at the end of the reply task (the 31B
 still sometimes mocks the admin despite a standing order); a profile cleanup pass (one-off plans
 end up in facts, the bot's own name as a nickname); daily Badger backups and an admin `/reset`;
-logs to a file and richer `/status`; a shared LLM queue that serves replies first; voice
-transcription.
+logs to a file and richer `/status`; a shared LLM queue that serves replies first.
 
 ---
 

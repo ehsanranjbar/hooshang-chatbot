@@ -24,11 +24,11 @@ const frameSide = 512
 // ffmpegTimeout bounds one frame extraction (probe included).
 const ffmpegTimeout = 30 * time.Second
 
-// ffmpegTools resolves ffmpeg and ffprobe once (media.ffmpeg, else PATH).
+// ffmpegTools resolves ffmpeg and ffprobe once (features.media.ffmpeg, else PATH).
 // Missing tools are not an error: clips then fall back to their thumbnail.
 func (b *Bot) ffmpegTools() (ffmpeg, ffprobe string) {
 	b.ffOnce.Do(func() {
-		name := b.deps.Cfg.Media.FFmpeg
+		name := b.deps.Cfg.FFmpeg()
 		if name == "" {
 			name = "ffmpeg"
 		}
@@ -49,12 +49,12 @@ func (b *Bot) ffmpegTools() (ffmpeg, ffprobe string) {
 }
 
 // mediaImages returns the pictures to send for a media ref: n frames of the
-// clip when it has one, ffmpeg can decode it and media.frames > 1, else the
+// clip when it has one, ffmpeg can decode it and features.media.frames > 1, else the
 // single downloaded image (the thumbnail for clips). Extraction never fails
 // the caller: any problem falls back to the thumbnail. framed says whether
 // the images are clip frames.
 func (b *Bot) mediaImages(ctx context.Context, ref mediaRef) (imgs []llm.Image, framed bool, err error) {
-	if n := b.deps.Cfg.Media.Frames; ref.clipID != "" && n > 1 {
+	if n := b.deps.Cfg.Features.Media.Frames; ref.clipID != "" && n > 1 {
 		frames, ferr := b.clipFrames(ctx, ref.clipID, n)
 		if ferr == nil {
 			return frames, true, nil

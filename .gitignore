@@ -3,5 +3,8 @@ config.yaml
 data/
 /hooshang
 
-# IranNastaliq is not redistributable; point faal.font at your own copy if you have one
+# IranNastaliq is not redistributable; point nastaliq.font at your own copy if you have one
 internal/faalimg/fonts/IranNastaliq.ttf
+
+# whisper.cpp models (hundreds of MB): see README
+models/

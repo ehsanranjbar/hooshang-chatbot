@@ -27,17 +27,33 @@ func (b *Bot) handleCommand(ctx context.Context, m *telego.Message, text string)
 		b.replyCommand(m, i18n.Help)
 
 	case "faal":
+		if !b.deps.Cfg.Features.Faal.On() {
+			b.replyCommand(m, i18n.FeatureOff)
+			return
+		}
 		wish := strings.TrimSpace(args)
 		b.enqueueFunc(chatID, func(ctx context.Context) { b.handleFaal(ctx, m, wish) })
 
 	case "poem":
+		if !b.deps.Cfg.Features.Poem.On() {
+			b.replyCommand(m, i18n.FeatureOff)
+			return
+		}
 		poet := strings.TrimSpace(args)
 		b.enqueueFunc(chatID, func(ctx context.Context) { b.handlePoem(ctx, m, poet) })
 
 	case "roast":
+		if !b.deps.Cfg.Features.Roast.On() {
+			b.replyCommand(m, i18n.FeatureOff)
+			return
+		}
 		b.handleRoast(ctx, m)
 
 	case "me":
+		if !b.deps.Cfg.Features.Profiles.On() {
+			b.replyCommand(m, i18n.FeatureOff)
+			return
+		}
 		b.handleMe(m)
 
 	case "terms":
@@ -52,6 +68,10 @@ func (b *Bot) handleCommand(ctx context.Context, m *telego.Message, text string)
 		b.replyCommand(m, i18n.NoTeaseOff)
 
 	case "forgetme":
+		if !b.deps.Cfg.Features.Profiles.On() {
+			b.replyCommand(m, i18n.FeatureOff)
+			return
+		}
 		_ = b.deps.DB.DeleteMember(chatID, from)
 		b.replyCommand(m, i18n.Forgotten)
 
@@ -128,8 +148,12 @@ func (b *Bot) handleMe(m *telego.Message) {
 
 // handleTerms lists the group's glossary, most recently used first.
 func (b *Bot) handleTerms(m *telego.Message) {
+	if !b.deps.Cfg.Features.Glossary.On() {
+		b.replyCommand(m, i18n.FeatureOff)
+		return
+	}
 	terms, _ := b.deps.DB.Terms(m.Chat.ID)
-	if !b.deps.Cfg.Glossary.Enabled || len(terms) == 0 {
+	if len(terms) == 0 {
 		b.replyCommand(m, i18n.NoTerms)
 		return
 	}
@@ -165,11 +189,15 @@ func (b *Bot) handleStatus(m *telego.Message) {
 	fmt.Fprintf(&sb, "Workers: %d\n", workers)
 	fmt.Fprintf(&sb, "Memory queue: %d\n", queue)
 	fmt.Fprintf(&sb, "Members: %d\n", len(members))
-	if g := b.deps.Cfg.GroupMemory; g.Enabled {
+	fmt.Fprintf(&sb, "Features: %s\n", featureList(b.deps.Cfg.Features.Active()))
+	if b.transcriber != nil {
+		fmt.Fprintf(&sb, "Voice queue: %d\n", len(b.transcriber.queue))
+	}
+	if g := b.deps.Cfg.Features.GroupMemory; g.On() {
 		events, _ := b.deps.DB.GroupEvents(chatID, g.TTL)
 		fmt.Fprintf(&sb, "Group memory: %d events\n", len(events))
 	}
-	if g := b.deps.Cfg.Glossary; g.Enabled {
+	if g := b.deps.Cfg.Features.Glossary; g.On() {
 		terms, _ := b.deps.DB.Terms(chatID)
 		fmt.Fprintf(&sb, "Glossary: %d/%d terms\n", len(terms), g.MaxItems)
 	}
@@ -180,4 +208,12 @@ func (b *Bot) handleStatus(m *telego.Message) {
 		}
 	}
 	b.replyCommand(m, sb.String())
+}
+
+// featureList renders the names of the features that are on.
+func featureList(on []string) string {
+	if len(on) == 0 {
+		return "none"
+	}
+	return strings.Join(on, ", ")
 }

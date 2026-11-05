@@ -5,13 +5,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ehsanranjbar/hooshang/internal/config"
 	"github.com/ehsanranjbar/hooshang/internal/llm"
 	"github.com/ehsanranjbar/hooshang/internal/store"
 )
 
 func enableGlossary(b *Bot) {
-	g := &b.deps.Cfg.Glossary
-	g.Enabled, g.MaxItems, g.InPrompt = true, 100, 8
+	b.deps.Cfg.Features.Glossary = &config.GlossaryFeature{Enabled: true, MaxItems: 100, InPrompt: 8}
 }
 
 func TestLearnTermByAnyone(t *testing.T) {

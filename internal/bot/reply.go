@@ -30,6 +30,7 @@ func (b *Bot) runReply(ctx context.Context, j job) {
 
 	// A photo or sticker the bot is asked about is described first.
 	pre := b.describeTrigger(ctx, j.msg)
+	b.transcribeTrigger(ctx, j.msg) // a voice message, before it is read
 
 	// 2–5. The prompt and the tools.
 	answered := false
@@ -97,7 +98,7 @@ func (b *Bot) replyRequest(j job) (llm.Request, map[string]llm.ToolFunc) {
 		Now:      prompts.FormatNow(time.Now()),
 	})
 	if j.authorID() > 0 && b.deps.Admins.IsAdmin(j.chatID, j.authorID()) {
-		sys += prompts.AdminRules()
+		sys += prompts.AdminRules(b.deps.Cfg.Features.Profiles.On()) // the edit_memory rules only with profiles
 	}
 	userMsg, _ := prompts.ReplyTask(prompts.TaskData{
 		Language:   b.deps.Cfg.Bot.Language,
@@ -198,7 +199,7 @@ func (b *Bot) taskFor(j job) string {
 		return "Reply to the conversation."
 	}
 	task := "Reply to the >> message from " + displayNameOf(j.msg) + ". If it asks a real question (a fact, a person, the group, a term), answer it plainly and politely, with no jab. If it insults or mocks you, hit back hard. If a reaction is all it needs, call react and reply with exactly -."
-	if b.deps.Admins.IsAdmin(j.chatID, j.msg.From.ID) {
+	if b.deps.Cfg.Features.Profiles.On() && b.deps.Admins.IsAdmin(j.chatID, j.msg.From.ID) {
 		task += " " + displayNameOf(j.msg) + " is the admin: if this message tells you to remember, forget or correct something about a member, call edit_memory first."
 	}
 	return task
@@ -314,6 +315,9 @@ func (b *Bot) formatTranscript(j job, kept []store.Message) string {
 //   - the members who wrote in the transcript, latest first;
 //   - up to bot.random_profiles random other members.
 func (b *Bot) renderProfiles(j job, msgs []store.Message) string {
+	if !b.deps.Cfg.Features.Profiles.On() {
+		return ""
+	}
 	seen := map[int64]bool{0: true, b.botID: true}
 	var must, more []int64
 	add := func(list *[]int64, id int64) {
@@ -451,6 +455,9 @@ func hasName(text, name string) bool {
 // the author, the people the message is about, the target, and every member
 // who wrote in the transcript. Unlike profiles, they are always shown.
 func (b *Bot) renderOrders(j job, msgs []store.Message) string {
+	if !b.deps.Cfg.Features.Profiles.On() {
+		return ""
+	}
 	seen := map[int64]bool{0: true, b.botID: true}
 	var ids []int64
 	add := func(id int64) {
@@ -546,10 +553,10 @@ func asksAboutGroup(j job) bool {
 }
 
 // renderGroupMemory renders the group's top events, but only with probability
-// group_memory.prompt_chance, so the bot doesn't keep steering back to them.
+// features.group_memory.prompt_chance, so the bot doesn't keep steering back to them.
 func (b *Bot) renderGroupMemory(chatID int64, j job) string {
-	g := b.deps.Cfg.GroupMemory
-	if !g.Enabled || g.InPrompt == 0 || (!asksAboutGroup(j) && b.roll() >= g.PromptChance) {
+	g := b.deps.Cfg.Features.GroupMemory
+	if !g.On() || g.InPrompt == 0 || (!asksAboutGroup(j) && b.roll() >= g.PromptChance) {
 		return ""
 	}
 	events, err := b.deps.DB.GroupEvents(chatID, g.TTL)
@@ -560,11 +567,11 @@ func (b *Bot) renderGroupMemory(chatID int64, j job) string {
 }
 
 // renderGlossary renders the group's terms that come up in the transcript (at
-// most glossary.in_prompt, the longest first) and marks them used, which is
+// most features.glossary.in_prompt, the longest first) and marks them used, which is
 // what keeps a term from being evicted.
 func (b *Bot) renderGlossary(chatID int64, transcript string) string {
-	g := b.deps.Cfg.Glossary
-	if !g.Enabled {
+	g := b.deps.Cfg.Features.Glossary
+	if !g.On() {
 		return ""
 	}
 	terms, err := b.deps.DB.Terms(chatID)

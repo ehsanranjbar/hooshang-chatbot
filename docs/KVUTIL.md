@@ -79,9 +79,9 @@ Types (in `internal/store/store.go`): `Chat`, `Member`, `Profile`, `Item`, `Mess
 | `members/by_username` | `index.FieldIndex` | `Pair(chatID, lower(username))` | → member key | members without a username are not indexed |
 | `messages` | `typed.Store` | `Pair(chatID, messageID)` | `Message` | `SetWithTTL`; memkv has no TTL, so it falls back to `Set` |
 | `memory_edits` | `typed.Store` | `Pair(chatID, unixNano)` | `Edit` | |
-| `group_events` | `typed.Store` | `Pair(chatID, FirstAt unixNano)` | `GroupEvent` | `SetWithTTL` from `LastAt`; at most `group_memory.max_items` per chat |
-| `media` | `typed.Store` | `Pair(0, FNV-64a of "media:"+file_unique_id)` | `MediaDesc` | sticker/GIF descriptions shared by all chats; `SetWithTTL` `media.cache_ttl` |
-| `terms` | `typed.Store` | `Pair(chatID, FNV-64a of NormalizeTerm(term))` | `Term` | at most `glossary.max_items` per chat; `PutTerm` evicts the oldest `UsedAt` in the same transaction |
+| `group_events` | `typed.Store` | `Pair(chatID, FirstAt unixNano)` | `GroupEvent` | `SetWithTTL` from `LastAt`; at most `features.group_memory.max_items` per chat |
+| `media` | `typed.Store` | `Pair(0, FNV-64a of "media:"+file_unique_id)` | `MediaDesc` | sticker/GIF descriptions shared by all chats; `SetWithTTL` `features.media.cache_ttl` |
+| `terms` | `typed.Store` | `Pair(chatID, FNV-64a of NormalizeTerm(term))` | `Term` | at most `features.glossary.max_items` per chat; `PutTerm` evicts the oldest `UsedAt` in the same transaction |
 
 Group chat IDs are negative. Integer keys sort correctly with negative values (this is tested).
 

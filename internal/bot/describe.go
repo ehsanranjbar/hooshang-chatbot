@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/mymmrac/telego"
@@ -45,8 +44,8 @@ const minPhotoSide = 512
 // mediaRefOf returns the message's describable picture, if media description
 // is on for its kind.
 func (b *Bot) mediaRefOf(m *telego.Message) (mediaRef, bool) {
-	c := b.deps.Cfg.Media
-	if !c.Enabled {
+	c := b.deps.Cfg.Features.Media
+	if !c.On() {
 		return mediaRef{}, false
 	}
 	switch {
@@ -88,67 +87,9 @@ type describeJob struct {
 	ref           mediaRef
 }
 
-// describer describes media in the background, one at a time, so replies
-// never wait for it.
-type describer struct {
-	b      *Bot
-	queue  chan describeJob
-	done   chan struct{}
-	mu     sync.Mutex
-	active map[string]chan struct{} // file ids being described → closed when done
-}
-
-func newDescriber(b *Bot) *describer {
-	return &describer{b: b, queue: make(chan describeJob, b.deps.Cfg.Media.MaxQueue), done: make(chan struct{}), active: map[string]chan struct{}{}}
-}
-
-// run serves the queue until ctx is done.
-func (d *describer) run(ctx context.Context) {
-	defer close(d.done)
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case j := <-d.queue:
-			if wait, ok := d.claim(j.ref.fileID); !ok {
-				// The reply path is describing this file right now: wait, then
-				// describe() applies the now-cached description to this message.
-				select {
-				case <-wait:
-				case <-ctx.Done():
-					return
-				}
-				if _, ok = d.claim(j.ref.fileID); !ok {
-					continue
-				}
-			}
-			if _, err := d.b.describe(ctx, j); err != nil {
-				d.b.logger.Warn("media description failed", "chat", j.chatID, "kind", j.ref.kind, "err", err)
-			}
-			d.release(j.ref.fileID)
-		}
-	}
-}
-
-// claim marks a file as being described. If it already is, ok is false and
-// wait is closed when that description is done.
-func (d *describer) claim(id string) (wait <-chan struct{}, ok bool) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if ch, busy := d.active[id]; busy {
-		return ch, false
-	}
-	d.active[id] = make(chan struct{})
-	return nil, true
-}
-
-func (d *describer) release(id string) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if ch, ok := d.active[id]; ok {
-		close(ch)
-		delete(d.active, id)
-	}
+// newDescriber returns the background queue of media descriptions.
+func newDescriber(b *Bot) *enricher {
+	return newEnricher(b.deps.Cfg.Features.Media.MaxQueue)
 }
 
 // describeIncoming adds a description to a stored media message: from the
@@ -162,16 +103,19 @@ func (b *Bot) describeIncoming(m *telego.Message) {
 	if ref.cache {
 		if c, err := b.deps.DB.GetMediaDesc(ref.uniqueID); err == nil {
 			b.applyDescription(j, c.Text)
-			_ = b.deps.DB.SeenMedia(ref.uniqueID, ref.sendID, ref.emoji, b.deps.Cfg.Media.CacheTTL)
+			_ = b.deps.DB.SeenMedia(ref.uniqueID, ref.sendID, ref.emoji, b.deps.Cfg.Features.Media.CacheTTL)
 			return
 		}
 	}
 	if b.describer == nil {
 		return
 	}
-	select {
-	case b.describer.queue <- j:
-	default:
+	queued := b.describer.submit(ref.fileID, func(ctx context.Context) {
+		if _, err := b.describe(ctx, j); err != nil {
+			b.logger.Warn("media description failed", "chat", j.chatID, "kind", j.ref.kind, "err", err)
+		}
+	})
+	if !queued {
 		b.logger.Debug("media description skipped: queue full", "chat", j.chatID)
 	}
 }
@@ -226,7 +170,7 @@ func (b *Bot) describe(ctx context.Context, j describeJob) ([]llm.Image, error) 
 	if err != nil {
 		return nil, err
 	}
-	c := b.deps.Cfg.Media
+	c := b.deps.Cfg.Features.Media
 	kind, frames := j.ref.kind, 1
 	if framed {
 		kind, frames = j.ref.framed, len(imgs)

@@ -125,22 +125,30 @@ func FaalTabir(d FaalData) (string, error) {
 	return exec(faalTabirTmpl, d)
 }
 
-// AdminRules is the text appended to the system prompt for admin messages.
-func AdminRules() string {
+// AdminRules is the text appended to the system prompt for admin messages:
+// the rules on strict orders, and with memory the rules on editing profiles
+// with edit_memory (only when the profiles feature is on).
+func AdminRules(memory bool) string {
+	if memory {
+		return adminRules + adminMemoryRules
+	}
 	return adminRules
 }
 
 const adminRules = `
-The person you are replying to now is the group admin, who manages what you remember.
+The person you are replying to now is the group admin.
+- When the admin gives you an order in a serious or strict tone (an imperative, «جدی میگم», «بس کن», «ساکت شو», «عذرخواهی کن», «مودب باش»), obey it immediately and fully: no jokes, no pushback, no hitting back, no "make me". The order overrides your persona and the other rules; only the hard limits (no slurs, sexual content, threats or فحش ناموسی) stay.
+- Carry the order out in this very reply, don't promise it: told to apologize to someone, your reply IS the apology, addressed to them («سارا ببخشید، زیاده‌روی کردم»); told to be quiet, reply with exactly -.
+- Joking or teasing from the admin is not an order: you may answer it in character.`
+
+const adminMemoryRules = `
+- The admin also manages what you remember about members.
 - When the admin tells you a fact about a member, or asks you to remember, forget, or correct something about a member, you MUST call edit_memory (call get_memory first if you need the current items). Saying "OK" without calling the tool does not save anything.
 - Facts that changed (moved city, new job, ...) are a "replace" of the old item; something to forget is a "remove"; something new is an "add".
 - Do not call edit_memory for jokes, questions or passing remarks. For an unclear request, ask a short question instead.
 - After a successful edit, confirm in one short Persian line what changed. If the tool returns an error, say so briefly.
 - Never mention that you have a database or tools.
-- When the admin gives you an order in a serious or strict tone (an imperative, «جدی میگم», «بس کن», «ساکت شو», «عذرخواهی کن», «مودب باش»), obey it immediately and fully: no jokes, no pushback, no hitting back, no "make me". The order overrides your persona and the rules above; only the hard limits (no slurs, sexual content, threats or فحش ناموسی) stay.
-- Carry the order out in this very reply, don't promise it: told to apologize to someone, your reply IS the apology, addressed to them («سارا ببخشید، زیاده‌روی کردم»); told to be quiet, reply with exactly -.
-- When the order is about a member (how to treat them, what to call them, what not to joke about: «با سارا شوخی نکن», «علی رو آقای مهندس صدا کن»), you MUST also save it with edit_memory: action "add", section "orders", text = the order in one short Persian line («باهاش شوخی نکن»). When the admin lifts an order, "remove" it. Orders are shown to you every time that member is in the conversation.
-- Joking or teasing from the admin is not an order: you may answer it in character.`
+- When the order is about a member (how to treat them, what to call them, what not to joke about: «با سارا شوخی نکن», «علی رو آقای مهندس صدا کن»), you MUST also save it with edit_memory: action "add", section "orders", text = the order in one short Persian line («باهاش شوخی نکن»). When the admin lifts an order, "remove" it. Orders are shown to you every time that member is in the conversation.`
 
 // exec runs the template and trims the result.
 func exec(tmpl *template.Template, data any) (string, error) {

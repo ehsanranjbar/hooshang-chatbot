@@ -8,14 +8,14 @@ import (
 
 	"github.com/mymmrac/telego"
 
+	"github.com/ehsanranjbar/hooshang/internal/config"
 	"github.com/ehsanranjbar/hooshang/internal/llm"
 	"github.com/ehsanranjbar/hooshang/internal/memory"
 	"github.com/ehsanranjbar/hooshang/internal/store"
 )
 
 func enableGroupMemory(b *Bot, chance float64) {
-	g := &b.deps.Cfg.GroupMemory
-	g.Enabled, g.TTL, g.MaxItems, g.UpdateEvery, g.InPrompt, g.PromptChance = true, 7*24*time.Hour, 15, 50, 4, chance
+	b.deps.Cfg.Features.GroupMemory = &config.GroupMemoryFeature{Enabled: true, TTL: 7 * 24 * time.Hour, MaxItems: 15, UpdateEvery: 50, InPrompt: 4, PromptChance: chance}
 }
 
 func TestRepliesAndReactionsAreCounted(t *testing.T) {
@@ -51,7 +51,7 @@ func TestGroupUpdateIsTriggered(t *testing.T) {
 	b, db, _, fake := replyBot(t, 10, llm.Response{Content: "-"})
 	enableGroupMemory(b, 0)
 	b.deps.Cfg.Bot.SpontaneousChance = 0
-	b.deps.Cfg.GroupMemory.UpdateEvery = 5
+	b.deps.Cfg.Features.GroupMemory.UpdateEvery = 5
 	upd := memory.NewUpdater(db, fake, "m", memory.UpdaterConfig{Group: memory.GroupConfig{TTL: time.Hour, MaxItems: 5}}, nil)
 	b.deps.Memory = upd
 	for i := 1; i <= 5; i++ {

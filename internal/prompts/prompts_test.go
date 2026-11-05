@@ -111,11 +111,15 @@ func TestFaalTabirRenders(t *testing.T) {
 }
 
 func TestAdminRules(t *testing.T) {
-	out := AdminRules()
+	out := AdminRules(true)
 	for _, want := range []string{"edit_memory", "admin", "MUST call", "short question", "obey it immediately", `section "orders"`, "IS the apology"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("admin rules missing %q: %s", want, out)
 		}
+	}
+	noMem := AdminRules(false) // profiles off: the order rules stay, the memory rules go
+	if strings.Contains(noMem, "edit_memory") || !strings.Contains(noMem, "obey it immediately") || !strings.Contains(noMem, "IS the apology") {
+		t.Errorf("admin rules without memory: %s", noMem)
 	}
 }
 
