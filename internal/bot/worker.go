@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/mymmrac/telego"
+
+	"github.com/ehsanranjbar/hooshang/internal/rag"
 )
 
 // jobKind selects how a job is executed.
@@ -27,8 +29,10 @@ type job struct {
 	target     int64           // spontaneous/roast target user id (0 if none)
 	targetName string          // rendered target name
 	fn         func(ctx context.Context)
-	answered   *bool     // set by a tool that fully answered the request (the faal)
-	asOf       time.Time // DumpPrompt only: render the chat as it was then, up to msg
+	answered   *bool       // set by a tool that fully answered the request (the faal)
+	asOf       time.Time   // DumpPrompt only: render the chat as it was then, up to msg
+	queryVec   *rag.Vector // the retrieval query, embedded once per job (nil = not yet)
+	queryOK    bool        // whether queryVec is usable
 }
 
 // worker serves a single chat. Its fields are guarded by workers.mu.

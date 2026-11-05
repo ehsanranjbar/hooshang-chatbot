@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"time"
@@ -47,6 +48,6 @@ func DumpPrompt(d Deps, botID, chatID, messageID int64, full bool) (llm.Request,
 	if m == nil {
 		return llm.Request{}, fmt.Errorf("no such message in chat %d", chatID)
 	}
-	req, _ := b.replyRequest(job{kind: jobReply, chatID: chatID, msg: m, asOf: time.Unix(m.Date, 0)})
+	req, _ := b.replyRequest(context.Background(), &job{kind: jobReply, chatID: chatID, msg: m, asOf: time.Unix(m.Date, 0)})
 	return req, nil
 }

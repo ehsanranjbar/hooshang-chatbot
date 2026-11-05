@@ -68,9 +68,9 @@ func TestGroupUpdateIsTriggered(t *testing.T) {
 func TestGroupMemoryInPrompts(t *testing.T) {
 	b, db, _, fake := replyBot(t, 10, llm.Response{Content: "x"}, llm.Response{Content: "y"}, llm.Response{Content: "z"})
 	now := time.Now()
-	_ = db.ReplaceGroupEvents(testChat, []store.GroupEvent{
-		{Text: "برنامه کوه جمعه قطعی شد", Score: 9, FirstAt: now, LastAt: now.Add(-26 * time.Hour)},
-	}, 7*24*time.Hour)
+	_, _ = db.UpdateMemory(testChat, store.GroupEntity, func(m *store.Memory) {
+		m.Add(store.Item{Kind: store.KindEvent, Text: "برنامه کوه جمعه قطعی شد", Score: 9, Seen: 1, FirstAt: now, LastAt: now.Add(-26 * time.Hour), Expires: now.Add(6 * 24 * time.Hour)})
+	})
 	m := say(b, 1, ali, "هوشنگ این هفته چه خبر بود؟")
 
 	enableGroupMemory(b, 1)

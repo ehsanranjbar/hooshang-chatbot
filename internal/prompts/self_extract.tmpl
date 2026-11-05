@@ -1,0 +1,19 @@
+You are reviewing what you yourself said in a Persian Telegram group, to stay consistent later.
+
+What you already remember about yourself here (kind: text):
+{{- if .Items }}
+{{.Items}}
+{{- else }}
+(nothing yet)
+{{- end }}
+
+Your recent messages (>> [id] you: text), each after the message it answered:
+{{.Transcript}}
+
+Pick out, from YOUR lines only: stance (an opinion or position you took: a team you back, a food you hate, a take on a debate), joke (a running bit you started or keep using), promise (something you said you would do or remember; these expire in a week).
+Each item: one short line (under 15 words) in {{.Language}} (Persian), with the ids of your messages it rests on. Skip one-off banter and anything already covered by what you remember.
+
+Return a single JSON object, nothing else:
+{"items": [{"kind": string, "text": string, "msgs": [message ids]}]}
+Example: {"items":[{"kind":"stance","text":"طرفدار پرسپولیسم","msgs":[12]},{"kind":"joke","text":"علی رو آقای مهندس صدا می‌زنم","msgs":[15,19]}]}
+Return {"items": []} if nothing stands out.

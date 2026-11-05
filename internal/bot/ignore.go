@@ -55,6 +55,8 @@ func (b *Bot) handleIgnoreMe(m *telego.Message) {
 	if err != nil {
 		b.logger.Error("ignoreme: messages not deleted", "chat", chatID, "user", userID, "err", err)
 	}
+	_ = b.deps.DB.DeleteMemory(chatID, userID)
+	b.purgeArchive(chatID, userID)
 	// NOTE: when the archive and the vector index exist, purge this member's
 	// entries from them here too.
 	b.logger.Info("member ignored", "chat", chatID, "user", userID, "messages_deleted", n)

@@ -9,10 +9,11 @@ import (
 // response in order; once the queue is exhausted it keeps returning the last
 // one. Every request made is recorded in Calls.
 type Fake struct {
-	mu        sync.Mutex
-	Responses []Response
-	Calls     []Request
-	calls     int
+	mu         sync.Mutex
+	Responses  []Response
+	Calls      []Request
+	calls      int
+	EmbedCalls int // Embed calls made
 }
 
 // Queue adds a response to the fake's script.

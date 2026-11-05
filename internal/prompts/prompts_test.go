@@ -86,13 +86,14 @@ func TestMemoryExtractRenders(t *testing.T) {
 	out, err := MemoryExtract(ExtractData{
 		Language:   "fa",
 		TargetName: "Ali",
-		Profile:    `{"nickname":"","summary":"","facts":["lives in Tehran"]}`,
-		Transcript: ">> Ali: I live in Tehran\n  Sara: hi",
+		Items:      "fact: lives in Tehran",
+		Kinds:      "fact, interest",
+		Transcript: ">> [1] Ali: I live in Tehran\n   [2] Sara: hi",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Ali", `"facts"`, "lives in Tehran", ">> Ali: I live in Tehran", "15 words"} {
+	for _, want := range []string{"Ali", `"items"`, "lives in Tehran", ">> [1] Ali: I live in Tehran", "15 words", "episode"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("memory extract missing %q: %s", want, out)
 		}

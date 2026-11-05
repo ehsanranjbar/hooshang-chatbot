@@ -17,6 +17,8 @@ llm:
   timeout: 180s                          # tool rounds plus reasoning can take a minute
   tools: true                            # enable LLM tool calling at all (faal/poem, stickers, glossary, admin memory edits)
   json_schema: true                      # response_format json_schema for memory extraction (31B: 5/5, 2x faster; breaks the 26B)
+  embedding_model: "text-embedding-bge-m3"  # the embedding model loaded next to the chat model (features.rag); "" = no retrieval
+  context_tokens: 32768                  # the context window the chat model is loaded with; prompts are trimmed to fit
 
 bot:
   name: "هوشنگ"
@@ -78,15 +80,23 @@ bot:
 # section (just `roast:`) is on with all defaults.
 features:
 
-  # Profiles: what the bot remembers about each member (facts, interests, quirks,
-  # relationships, boundaries), and what the admin can edit in plain language.
-  # Off: no profile updates, no profiles in prompts, /me and /forgetme say the
-  # feature is off, and the admin memory tools (get_memory, edit_memory) are gone.
+  # Profiles: what the bot remembers about each member as items (facts, interests,
+  # quirks, relationships, boundaries, dated episodes, stances, running jokes, looks
+  # from their profile photos), each with how often it was seen; what it remembers
+  # about itself (stances, jokes, promises); and how the group writes. The admin
+  # edits memory in plain language. Off: no memory updates, no profiles in prompts,
+  # /me and /forgetme say the feature is off, no get_memory / edit_memory tools.
   profiles:
-    update_every: 15                     # update a profile every N new messages
-    max_age: 24h                         # older profiles are re-checked
+    update_every: 15                     # update a member's memory every N of their messages
+    max_age: 24h                         # older memories are re-checked
     context_messages: 150                # messages the memory updater sees
-    max_items: 10                        # max items per profile section
+    max_items: 10                        # max items per kind
+    self_every: 20                       # update the bot's own memory every N of its messages (0 = off)
+    style_samples: 12                    # anonymised sample messages of the group shown in the system prompt (0 = off)
+    seed:                                # read a member's Telegram profile when first seen, and again after `refresh`
+      photos: 2                          # profile photos described by the vision model into "look" items (0 = off)
+      bio: true                          # the bio and birthday, when Telegram exposes them
+      refresh: 720h
 
   # Group memory: the topics and events the group cared about most (by reactions
   # and replies). Reactions are only delivered while the bot is a group admin.
@@ -145,6 +155,19 @@ features:
     max_queue: 10                        # pending transcriptions; more are skipped
     max_words: 120                       # transcript length cap
     video_notes: true                    # round video messages too (ffmpeg takes the audio)
+
+  # Retrieval (RAG): member messages are archived for months and embedded with
+  # llm.embedding_model; a reply gets the older messages relevant to it, a big
+  # memory shows only its relevant items, find_media and the glossary also match by
+  # meaning. Needs llm.embedding_model; without it this section does nothing.
+  rag:
+    archive_ttl: 4320h                   # keep archived messages for 180 days
+    top_k: 5                             # older messages shown in a reply at most
+    min_score: 0.55                      # least cosine similarity to count as relevant (bge-m3: related ≈ 0.8, unrelated ≈ 0.45)
+    decay_days: 30                       # half-life of the recency bonus
+    batch: 16                            # texts per embedding call
+    max_queue: 500                       # pending embeddings
+    max_per_chat: 50000                  # message vectors kept in memory per chat
 
   # Greetings: now and then answers a member's «صبح بخیر» / «شب بخیر», welcomes
   # new members and comments when someone leaves.

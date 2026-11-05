@@ -35,6 +35,32 @@ type Features struct {
 	Voice       *VoiceFeature       `yaml:"voice"`        // transcribing voice messages
 	Greetings   *GreetingsFeature   `yaml:"greetings"`    // answering صبح/شب بخیر, welcoming and seeing off members
 	Moderation  *ModerationFeature  `yaml:"moderation"`   // the admin moderates in plain words
+	RAG         *RAGFeature         `yaml:"rag"`          // retrieval: an archive of messages and vectors over memories and media
+}
+
+// RAGFeature is features.rag: the long-term message archive and the vectors
+// (embeddings) that let the bot pull up what is relevant: older messages for
+// a reply, the relevant items of a big memory, a sticker by meaning, a term
+// by meaning. It needs llm.embedding_model.
+type RAGFeature struct {
+	Enabled    bool          `yaml:"enabled"`
+	ArchiveTTL time.Duration `yaml:"archive_ttl"`  // how long archived messages are kept; default 4320h (180 days)
+	TopK       int           `yaml:"top_k"`        // older messages shown in a reply at most; default 5
+	MinScore   float64       `yaml:"min_score"`    // least cosine to count as relevant; default 0.45
+	DecayDays  int           `yaml:"decay_days"`   // half-life of the recency bonus; default 30
+	Batch      int           `yaml:"batch"`        // texts per embedding call; default 16
+	MaxQueue   int           `yaml:"max_queue"`    // pending embeddings; more wait for the next flush; default 500
+	MaxPerChat int           `yaml:"max_per_chat"` // message vectors kept in memory per chat; default 50000
+}
+
+// On reports whether the feature is on: its section is present and not disabled.
+func (f *RAGFeature) On() bool { return f != nil && f.Enabled }
+
+// UnmarshalYAML fills the defaults, then the keys of the section.
+func (f *RAGFeature) UnmarshalYAML(n *yaml.Node) error {
+	type plain RAGFeature
+	*f = RAGFeature{Enabled: true, ArchiveTTL: 180 * 24 * time.Hour, TopK: 5, MinScore: 0.55, DecayDays: 30, Batch: 16, MaxQueue: 500, MaxPerChat: 50000}
+	return decodeFeature(n, "rag", (*plain)(f))
 }
 
 // GreetingsFeature is features.greetings: the bot sometimes answers a
@@ -62,10 +88,17 @@ func (f *GreetingsFeature) UnmarshalYAML(n *yaml.Node) error {
 // ProfilesFeature is features.profiles: what the bot remembers about each member.
 type ProfilesFeature struct {
 	Enabled         bool          `yaml:"enabled"`
-	UpdateEvery     int           `yaml:"update_every"`     // update a profile every N new messages; default 15
-	MaxAge          time.Duration `yaml:"max_age"`          // older profiles are re-checked; default 24h
+	UpdateEvery     int           `yaml:"update_every"`     // update a member's memory every N of their messages; default 15
+	MaxAge          time.Duration `yaml:"max_age"`          // older memories are re-checked; default 24h
 	ContextMessages int           `yaml:"context_messages"` // messages the updater sees; default 150
-	MaxItems        int           `yaml:"max_items"`        // per profile section; default 10
+	MaxItems        int           `yaml:"max_items"`        // per kind; default 10
+	SelfEvery       int           `yaml:"self_every"`       // update the bot's own memory every N of its messages; default 20; 0 = off
+	StyleSamples    int           `yaml:"style_samples"`    // anonymised sample messages of the group kept for the prompt; default 12; 0 = off
+	Seed            struct {
+		Photos  int           `yaml:"photos"`  // profile photos described into the "look" items; default 2; 0 = off
+		Bio     bool          `yaml:"bio"`     // read the bio and birthday when Telegram exposes them; default true
+		Refresh time.Duration `yaml:"refresh"` // re-read the Telegram profile after; default 720h
+	} `yaml:"seed"`
 }
 
 // GroupMemoryFeature is features.group_memory: the events the group cared about.
@@ -183,7 +216,8 @@ func (f *ModerationFeature) UnmarshalYAML(n *yaml.Node) error {
 // UnmarshalYAML fills the defaults, then the keys of the section.
 func (f *ProfilesFeature) UnmarshalYAML(n *yaml.Node) error {
 	type plain ProfilesFeature // no methods: decoding into f itself would recurse
-	*f = ProfilesFeature{Enabled: true, UpdateEvery: 15, MaxAge: 24 * time.Hour, ContextMessages: 150, MaxItems: 10}
+	*f = ProfilesFeature{Enabled: true, UpdateEvery: 15, MaxAge: 24 * time.Hour, ContextMessages: 150, MaxItems: 10, SelfEvery: 20, StyleSamples: 12}
+	f.Seed.Photos, f.Seed.Bio, f.Seed.Refresh = 2, true, 30*24*time.Hour
 	return decodeFeature(n, "profiles", (*plain)(f))
 }
 
@@ -361,7 +395,7 @@ func (f Features) Active() []string {
 		{"profiles", f.Profiles.On()}, {"group_memory", f.GroupMemory.On()}, {"glossary", f.Glossary.On()},
 		{"media", f.Media.On()}, {"faal", f.Faal.On()}, {"poem", f.Poem.On()},
 		{"roast", f.Roast.On()}, {"voice", f.Voice.On()}, {"greetings", f.Greetings.On()},
-		{"moderation", f.Moderation.On()},
+		{"moderation", f.Moderation.On()}, {"rag", f.RAG.On()},
 	} {
 		if e.on {
 			on = append(on, e.name)
@@ -385,12 +419,18 @@ func (f *Features) validate() error {
 		if p.UpdateEvery < 1 || p.MaxAge <= 0 || p.ContextMessages < 1 || p.MaxItems < 1 {
 			return fmt.Errorf("features.profiles: update_every, context_messages and max_items must be >= 1 and max_age > 0")
 		}
+		if p.SelfEvery < 0 || p.StyleSamples < 0 || p.Seed.Photos < 0 || p.Seed.Photos > 10 || p.Seed.Refresh < 0 {
+			return fmt.Errorf("features.profiles: self_every and style_samples >= 0, seed.photos in [0, 10], seed.refresh >= 0")
+		}
 	}
 	if g := f.GroupMemory; g.On() && (g.TTL <= 0 || g.MaxItems < 1 || g.UpdateEvery < 1 || g.InPrompt < 0 || g.PromptChance < 0 || g.PromptChance > 1) {
 		return fmt.Errorf("features.group_memory: ttl must be > 0, max_items and update_every >= 1, in_prompt >= 0, prompt_chance in [0, 1]")
 	}
 	if g := f.Glossary; g.On() && (g.MaxItems < 1 || g.InPrompt < 1) {
 		return fmt.Errorf("features.glossary: max_items and in_prompt must be >= 1")
+	}
+	if r := f.RAG; r.On() && (r.ArchiveTTL <= 0 || r.TopK < 0 || r.MinScore < 0 || r.MinScore > 1 || r.DecayDays < 0 || r.Batch < 1 || r.MaxQueue < 1 || r.MaxPerChat < 100) {
+		return fmt.Errorf("features.rag: archive_ttl > 0, top_k >= 0, min_score in [0, 1], decay_days >= 0, batch and max_queue >= 1, max_per_chat >= 100")
 	}
 	if g := f.Greetings; g.On() && (g.Chance < 0 || g.Chance > 1 || g.MemberCooldown < 0 || g.ChatCooldown < 0) {
 		return fmt.Errorf("features.greetings: chance must be in [0, 1] and the cooldowns >= 0")

@@ -7,6 +7,7 @@ import (
 	"github.com/ehsanranjbar/hooshang/internal/text"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ehsanranjbar/hooshang/internal/ganjoor"
 	"github.com/ehsanranjbar/hooshang/internal/i18n"
@@ -56,7 +57,7 @@ func (b *Bot) toolsFor(j job) ([]llm.Tool, map[string]llm.ToolFunc) {
 			llm.Tool{Name: "get_memory", Description: "Show what is remembered about a member.",
 				Parameters: json.RawMessage(`{"type":"object","properties":{"member":{"type":"string"}},"required":["member"]}`)},
 			llm.Tool{Name: "edit_memory", Description: "Add, remove or replace remembered items for a member. Only for explicit requests.",
-				Parameters: json.RawMessage(`{"type":"object","properties":{"member":{"type":"string"},"ops":{"type":"array","items":{"type":"object","properties":{"action":{"type":"string","enum":["add","remove","replace"]},"section":{"type":"string","enum":["nickname","summary","facts","interests","quirks","relationships","boundaries","orders"]},"text":{"type":"string"},"old_text":{"type":"string"}},"required":["action","section"]}}},"required":["member","ops"]}`)},
+				Parameters: json.RawMessage(`{"type":"object","properties":{"member":{"type":"string"},"ops":{"type":"array","items":{"type":"object","properties":{"action":{"type":"string","enum":["add","remove","replace"]},"section":{"type":"string","enum":["nickname","summary","fact","interest","quirk","relationship","boundary","order","episode","stance","joke"]},"text":{"type":"string"},"old_text":{"type":"string"},"item_id":{"type":"integer","description":"the item's id from get_memory, to remove or replace exactly that one"}},"required":["action","section"]}}},"required":["member","ops"]}`)},
 		)
 		handlers["get_memory"] = b.toolGetMemory(j)
 		handlers["edit_memory"] = b.toolEditMemory(j)
@@ -180,6 +181,8 @@ const (
 )
 
 // toolLearnTerm is the learn_term handler: anyone may teach or correct a term.
+// Terms are items of the group's memory; when the glossary is full the least
+// recently used term is forgotten.
 func (b *Bot) toolLearnTerm(j job) llm.ToolFunc {
 	return func(_ context.Context, args string) (string, error) {
 		var a struct {
@@ -199,18 +202,43 @@ func (b *Bot) toolLearnTerm(j job) llm.ToolFunc {
 		case len([]rune(a.Meaning)) > maxMeaningRunes:
 			a.Meaning = string([]rune(a.Meaning)[:maxMeaningRunes])
 		}
-		name := ""
-		if j.msg != nil {
-			name = displayNameOf(j.msg)
-		}
-		_, err := b.deps.DB.PutTerm(j.chatID, store.Term{
-			Term: a.Term, Meaning: a.Meaning, ByID: j.authorID(), ByName: name,
-		}, b.deps.Cfg.Features.Glossary.MaxItems)
+		now := time.Now()
+		mem, err := b.deps.DB.UpdateMemory(j.chatID, store.GroupEntity, func(m *store.Memory) {
+			if cur := findTerm(m, a.Term); cur != nil {
+				cur.Text, cur.Note, cur.By, cur.LastAt = a.Term, a.Meaning, j.authorID(), now
+				cur.Seen++
+				return
+			}
+			m.Add(store.Item{Kind: store.KindTerm, Text: a.Term, Note: a.Meaning, By: j.authorID(), Seen: 1, FirstAt: now, LastAt: now})
+			terms := m.Kind(store.KindTerm)
+			for len(terms) > b.deps.Cfg.Features.Glossary.MaxItems {
+				oldest := 0
+				for i := range terms {
+					if terms[i].LastAt.Before(terms[oldest].LastAt) {
+						oldest = i
+					}
+				}
+				m.Remove(terms[oldest].ID)
+				terms = append(terms[:oldest], terms[oldest+1:]...)
+			}
+		})
 		if err != nil {
 			return "error: " + err.Error(), nil
 		}
+		b.embedItems(j.chatID, store.GroupEntity, mem.Kind(store.KindTerm))
 		return fmt.Sprintf("saved: «%s» = %s", a.Term, a.Meaning), nil
 	}
+}
+
+// findTerm returns the group's term item with the same folded text, or nil.
+func findTerm(m *store.Memory, term string) *store.Item {
+	f := text.Fold(term)
+	for i := range m.Items {
+		if m.Items[i].Kind == store.KindTerm && text.Fold(m.Items[i].Text) == f {
+			return &m.Items[i]
+		}
+	}
+	return nil
 }
 
 // toolForgetTerm is the forget_term handler: the admin or whoever taught the
@@ -223,17 +251,22 @@ func (b *Bot) toolForgetTerm(j job) llm.ToolFunc {
 		if err := json.Unmarshal([]byte(args), &a); err != nil {
 			return "error: bad arguments", nil
 		}
-		t, err := b.deps.DB.GetTerm(j.chatID, strings.Trim(strings.TrimSpace(a.Term), "\"'«»“”"))
-		if err != nil {
+		term := strings.Trim(strings.TrimSpace(a.Term), "\"'«»“”")
+		mem, err := b.deps.DB.GetMemory(j.chatID, store.GroupEntity)
+		t := findTerm(&mem, term)
+		if err != nil || t == nil {
 			return "error: no such term in the glossary", nil
 		}
-		if t.ByID != j.authorID() && !b.deps.Admins.IsAdmin(j.chatID, j.authorID()) {
-			return "error: only the admin or " + t.ByName + " (who taught it) can remove it", nil
+		if t.By != j.authorID() && !b.deps.Admins.IsAdmin(j.chatID, j.authorID()) {
+			who := b.targetName(j.chatID, t.By)
+			return "error: only the admin or " + who + " (who taught it) can remove it", nil
 		}
-		if err := b.deps.DB.DeleteTerm(j.chatID, t.Term); err != nil {
+		id := t.ID
+		if _, err := b.deps.DB.UpdateMemory(j.chatID, store.GroupEntity, func(m *store.Memory) { m.Remove(id) }); err != nil {
 			return "error: " + err.Error(), nil
 		}
-		return "forgotten: «" + t.Term + "»", nil
+		b.forgetItemVector(j.chatID, store.GroupEntity, id)
+		return "forgotten: «" + t.Text + "»", nil
 	}
 }
 
@@ -252,7 +285,8 @@ func (b *Bot) toolGetMemory(j job) llm.ToolFunc {
 		if err != nil || mem == nil {
 			return "error: no such member", nil
 		}
-		return renderMemory(mem), nil
+		m, _ := b.deps.DB.GetMemory(j.chatID, id)
+		return renderMemory(mem, m), nil
 	}
 }
 
@@ -273,18 +307,19 @@ func (b *Bot) toolEditMemory(j job) llm.ToolFunc {
 		if len(a.Ops) == 0 {
 			return "error: no operations given", nil
 		}
-		var before, after store.Profile
+		var before store.Memory
 		var changes []string
 		var applyErr error
-		_, err = b.deps.DB.UpdateMember(j.chatID, id, func(m *store.Member) {
-			before = m.Profile
-			var p store.Profile
-			p, changes, applyErr = memory.Apply(m.Profile, a.Ops)
+		after, err := b.deps.DB.UpdateMemory(j.chatID, id, func(m *store.Memory) {
+			before = *m
+			work := *m
+			work.Items = append([]store.Item(nil), m.Items...)
+			work.Suppressed = append([]string(nil), m.Suppressed...)
+			changes, applyErr = memory.Apply(&work, a.Ops, time.Now())
 			if applyErr != nil {
-				return // nothing changes; the member is written back as it was
+				return // nothing changes; the memory is written back as it was
 			}
-			after = p
-			m.Profile = p
+			*m = work
 		})
 		if err != nil {
 			return "error: " + err.Error(), nil
@@ -292,66 +327,34 @@ func (b *Bot) toolEditMemory(j job) llm.ToolFunc {
 		if applyErr != nil {
 			return "error: " + applyErr.Error(), nil
 		}
-		// Record the edit for the audit log.
+		b.embedItems(j.chatID, id, after.Items)
 		request := ""
 		if j.msg != nil {
 			request = j.msg.Text
 		}
-		_ = b.deps.DB.AddEdit(j.chatID, &store.Edit{
-			AdminID: j.authorID(),
-			UserID:  id,
-			Request: request,
-			Ops:     args,
-			Before:  before,
-			After:   after,
-		})
+		_ = b.deps.DB.AddEdit(j.chatID, &store.Edit{AdminID: j.authorID(), UserID: id, Request: request, Ops: args, Before: before, After: after})
 		return strings.Join(changes, "; "), nil
 	}
 }
 
-// renderMemory renders a member's profile plus a numbered list of items per
-// section, for the get_memory tool.
-func renderMemory(m *store.Member) string {
+// renderMemory renders a member's memory plus a numbered list of items per
+// kind with their ids, for the get_memory tool.
+func renderMemory(m *store.Member, mem store.Memory) string {
 	var sb strings.Builder
-	name := m.FirstName
-	if m.LastName != "" {
-		name += " " + m.LastName
-	}
-	sb.WriteString(name + ":\n")
-	sb.WriteString(memory.Render(m.Profile))
+	sb.WriteString(displayName(m) + ":\n")
+	sb.WriteString(memory.Render(mem))
 	sb.WriteByte('\n')
-	for _, section := range memory.Sections() {
-		items := profileItems(m.Profile, section)
+	for _, kind := range memory.Sections() {
+		items := mem.Kind(kind)
 		if len(items) == 0 {
 			continue
 		}
-		sb.WriteString(section + ":\n")
-		for i, it := range items {
-			fmt.Fprintf(&sb, "%d. %s%s\n", i+1, it.Text, lockedMark(it.Locked))
+		sb.WriteString(kind + ":\n")
+		for _, it := range items {
+			fmt.Fprintf(&sb, "#%d %s%s\n", it.ID, it.Text, lockedMark(it.Locked))
 		}
 	}
 	return strings.TrimSpace(sb.String())
-}
-
-// profileItems returns the item list for a section (nickname/summary are
-// strings, so they yield no items here).
-func profileItems(p store.Profile, section string) []store.Item {
-	switch section {
-	case "facts":
-		return p.Facts
-	case "interests":
-		return p.Interests
-	case "quirks":
-		return p.Quirks
-	case "relationships":
-		return p.Relationships
-	case "boundaries":
-		return p.Boundaries
-	case "orders":
-		return p.Orders
-	default:
-		return nil
-	}
 }
 
 // lockedMark returns a marker for locked items.
@@ -407,7 +410,7 @@ func (b *Bot) resolveMemberOpts(chatID int64, s string, j job, withIgnored bool)
 	norm := normalizeName(s)
 	var matches []int64
 	for _, m := range members {
-		if matchesName(m, norm) && (withIgnored || !m.Ignored) {
+		if b.matchesName(m, norm) && (withIgnored || !m.Ignored) {
 			matches = append(matches, m.UserID())
 		}
 	}
@@ -435,13 +438,13 @@ func normalizeName(s string) string { return text.Squash(s) }
 
 // matchesName reports whether a member matches a normalized name on first,
 // last or full name.
-func matchesName(m *store.Member, norm string) bool {
+func (b *Bot) matchesName(m *store.Member, norm string) bool {
 	if norm == "" {
 		return false
 	}
 	candidates := []string{m.FirstName, m.LastName, m.FirstName + m.LastName}
-	if m.Profile.Nickname != "" {
-		candidates = append(candidates, m.Profile.Nickname)
+	if nick := b.nicknames(m.ChatID())[m.UserID()]; nick != "" {
+		candidates = append(candidates, nick)
 	}
 	for _, c := range candidates {
 		if normalizeName(c) == norm {

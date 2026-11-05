@@ -193,6 +193,7 @@ func (b *Bot) describe(ctx context.Context, j describeJob) ([]llm.Image, error) 
 		return imgs, fmt.Errorf("empty description")
 	}
 	if j.ref.cache {
+		b.embedMedia(j.ref.uniqueID, desc)
 		_ = b.deps.DB.PutMediaDesc(store.MediaDesc{
 			Text: desc, UniqueID: j.ref.uniqueID, Kind: j.ref.media, FileID: j.ref.sendID,
 			Emoji: j.ref.emoji, Uses: 1, LastSeen: time.Now(),
@@ -205,13 +206,18 @@ func (b *Bot) describe(ctx context.Context, j describeJob) ([]llm.Image, error) 
 // applyDescription writes «[label: title — description]» in place of the
 // stored media tag.
 func (b *Bot) applyDescription(j describeJob, desc string) {
+	changed := ""
 	_ = b.deps.DB.UpdateMessage(j.chatID, j.msgID, func(m *store.Message) {
 		if m.Described || !strings.HasPrefix(m.Text, j.tag) {
 			return
 		}
 		m.Text = describedTag(j.tag, desc) + m.Text[len(j.tag):]
 		m.Described = true
+		changed = m.Text
 	})
+	if changed != "" {
+		b.rearchive(j.chatID, j.msgID, changed)
+	}
 }
 
 // describedTag puts a description inside a media tag: "[استیکر: 😂]" →

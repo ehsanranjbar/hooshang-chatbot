@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -12,15 +11,18 @@ import (
 	"github.com/ehsanranjbar/hooshang/internal/llm"
 	"github.com/ehsanranjbar/hooshang/internal/prompts"
 	"github.com/ehsanranjbar/hooshang/internal/store"
+	"github.com/ehsanranjbar/hooshang/internal/text"
 )
 
 // GroupConfig configures the group memory: a short list of the topics and
-// events the group cared about, each forgotten TTL after it was last seen.
-// A zero TTL disables it.
+// events the group cared about, each forgotten TTL after it was last seen,
+// plus a handful of anonymised sample messages that show how the group
+// writes. A zero TTL disables it.
 type GroupConfig struct {
 	TTL             time.Duration
-	MaxItems        int // kept per group, by engagement
+	MaxItems        int // events kept per group, by engagement
 	ContextMessages int // messages read per update; 0 → 200
+	Samples         int // style samples kept; 0 = none
 }
 
 // minGroupMessages is how many new member messages an update needs.
@@ -32,7 +34,7 @@ const maxNewEvents = 5
 // EnqueueGroup queues a group memory update for the chat (deduplicated).
 func (u *Updater) EnqueueGroup(chatID int64) {
 	if u.cfg.Group.TTL > 0 {
-		u.Enqueue(chatID, 0) // user 0 is the group itself
+		u.Enqueue(chatID, store.GroupEntity)
 	}
 }
 
@@ -41,14 +43,14 @@ type groupExtracted struct {
 	Events *[]struct {
 		Text   string  `json:"text"`
 		Msgs   []int64 `json:"msgs"`
-		SameAs int64   `json:"same_as"`
+		SameAs uint64  `json:"same_as"`
 	} `json:"events"`
 }
 
 // UpdateGroupNow updates the group memory from the messages since the last
-// update. The score of an event is the engagement (reactions and replies) of
-// the messages the model says it is based on, so the ranking rests on what the
-// group did, not on the model's opinion.
+// update: the events (scored by the engagement of the messages the model says
+// they rest on, so the ranking rests on what the group did) and the style
+// samples.
 func (u *Updater) UpdateGroupNow(ctx context.Context, chatID int64) error {
 	g := u.cfg.Group
 	chat, err := u.db.GetChat(chatID)
@@ -72,13 +74,25 @@ func (u *Updater) UpdateGroupNow(ctx context.Context, chatID int64) error {
 	if len(msgs) < minGroupMessages {
 		return u.db.UpdateChat(chatID, func(c *store.Chat) { c.MsgsSinceGroupUpdate = 0 })
 	}
+	done := func() error {
+		return u.db.UpdateChat(chatID, func(c *store.Chat) {
+			c.MsgsSinceGroupUpdate = 0
+			c.GroupUpdatedAt = time.Now()
+		})
+	}
+	if g.Samples > 0 {
+		samples := Samples(all, u.names(chatID), g.Samples)
+		if _, err := u.db.UpdateMemory(chatID, store.GroupEntity, func(m *store.Memory) { replaceKind(m, store.KindSample, samples, time.Now()) }); err != nil {
+			return err
+		}
+	}
 
-	events, err := u.db.GroupEvents(chatID, g.TTL)
+	cur, err := u.db.GetMemory(chatID, store.GroupEntity)
 	if err != nil {
 		return err
 	}
 	var evLines, lines []string
-	for _, e := range events {
+	for _, e := range cur.Kind(store.KindEvent) {
 		evLines = append(evLines, fmt.Sprintf("%d: %s", e.ID, e.Text))
 	}
 	engagement := map[int64]int{}
@@ -91,30 +105,14 @@ func (u *Updater) UpdateGroupNow(ctx context.Context, chatID int64) error {
 		lines = append(lines, line)
 	}
 	prompt, err := prompts.GroupExtract(prompts.GroupData{
-		Language:   u.cfg.Language,
-		Events:     strings.Join(evLines, "\n"),
-		Transcript: strings.Join(lines, "\n"),
-		Max:        maxNewEvents,
+		Language: u.cfg.Language, Events: strings.Join(evLines, "\n"), Transcript: strings.Join(lines, "\n"), Max: maxNewEvents,
 	})
 	if err != nil {
 		return err
 	}
-	maxTokens := u.cfg.MaxTokens
-	if maxTokens < 2048 {
-		maxTokens = 2048
-	}
 	resp, err := u.c.Chat(ctx, llm.Request{
-		Model:       u.model,
-		Messages:    []llm.Message{{Role: "user", Content: prompt}},
-		Temperature: 0.2,
-		MaxTokens:   maxTokens,
+		Model: u.model, Messages: []llm.Message{{Role: "user", Content: prompt}}, Temperature: 0.2, MaxTokens: max(u.cfg.MaxTokens, 2048),
 	})
-	done := func() error {
-		return u.db.UpdateChat(chatID, func(c *store.Chat) {
-			c.MsgsSinceGroupUpdate = 0
-			c.GroupUpdatedAt = time.Now()
-		})
-	}
 	if err != nil {
 		u.logger.Warn("group memory: llm call failed", "chat", chatID, "err", err)
 		return u.db.UpdateChat(chatID, func(c *store.Chat) { c.MsgsSinceGroupUpdate = 0 })
@@ -133,75 +131,127 @@ func (u *Updater) UpdateGroupNow(ctx context.Context, chatID int64) error {
 	}
 
 	now := time.Now()
-	byID := map[int64]int{}
-	for i, e := range events {
-		byID[e.ID] = i
-	}
-	added := 0
-	for _, x := range *ext.Events {
-		text := strings.TrimSpace(x.Text)
-		if text == "" {
-			continue
+	mem, err := u.db.UpdateMemory(chatID, store.GroupEntity, func(m *store.Memory) {
+		added := 0
+		for _, x := range *ext.Events {
+			textT := strings.TrimSpace(x.Text)
+			if textT == "" {
+				continue
+			}
+			score := 1
+			for _, id := range x.Msgs {
+				score += engagement[id] // ids the model made up count as 0
+			}
+			cur := m.Find(x.SameAs)
+			if cur == nil || cur.Kind != store.KindEvent {
+				cur = find(m, store.KindEvent, textT)
+			}
+			if cur != nil {
+				cur.Text, cur.LastAt, cur.Expires = textT, now, now.Add(g.TTL)
+				cur.Score += score
+				cur.Seen++
+				cur.Source = mergeSource(cur.Source, x.Msgs)
+				continue
+			}
+			if added == maxNewEvents {
+				continue
+			}
+			added++
+			m.Add(store.Item{Kind: store.KindEvent, Text: textT, Score: score, Seen: 1, FirstAt: now, LastAt: now,
+				Expires: now.Add(g.TTL), Source: mergeSource(nil, x.Msgs)})
 		}
-		score := 1
-		for _, id := range x.Msgs {
-			score += engagement[id] // ids the model made up count as 0
-		}
-		i, ok := byID[x.SameAs]
-		if !ok {
-			i, ok = sameText(events, text)
-		}
-		if ok {
-			events[i].Text, events[i].LastAt = text, now
-			events[i].Score += score
-			continue
-		}
-		if added == maxNewEvents {
-			continue
-		}
-		added++
-		events = append(events, store.GroupEvent{Text: text, Score: score, FirstAt: now, LastAt: now})
-	}
-	sort.SliceStable(events, func(i, j int) bool {
-		if events[i].Score != events[j].Score {
-			return events[i].Score > events[j].Score
-		}
-		return events[i].LastAt.After(events[j].LastAt)
+		capEvents(m, g.MaxItems)
+		m.UpdatedAt = now
 	})
-	if g.MaxItems > 0 && len(events) > g.MaxItems {
-		events = events[:g.MaxItems]
-	}
-	if err := u.db.ReplaceGroupEvents(chatID, events, g.TTL); err != nil {
+	if err != nil {
 		return err
 	}
+	u.embed(chatID, store.GroupEntity, mem)
 	return done()
 }
 
-func sameText(events []store.GroupEvent, text string) (int, bool) {
-	n := Normalize(text)
-	for i, e := range events {
-		if Normalize(e.Text) == n {
-			return i, true
+// capEvents keeps the max highest-scoring events.
+func capEvents(m *store.Memory, max int) {
+	events := m.Kind(store.KindEvent)
+	if max <= 0 || len(events) <= max {
+		return
+	}
+	for i := range events {
+		for j := i + 1; j < len(events); j++ {
+			if events[j].Score > events[i].Score || (events[j].Score == events[i].Score && events[j].LastAt.After(events[i].LastAt)) {
+				events[i], events[j] = events[j], events[i]
+			}
 		}
 	}
-	return 0, false
+	for _, e := range events[max:] {
+		m.Remove(e.ID)
+	}
 }
 
-// RenderGroup renders the top n events by score for a prompt, most recent
-// first: "- (دیروز) …".
-func RenderGroup(events []store.GroupEvent, n int, now time.Time) string {
-	if n <= 0 || len(events) == 0 {
-		return ""
+// replaceKind replaces every item of a kind with the given texts.
+func replaceKind(m *store.Memory, kind string, texts []string, now time.Time) {
+	for _, it := range m.Kind(kind) {
+		m.Remove(it.ID)
 	}
-	top := append([]store.GroupEvent(nil), events...)
-	sort.SliceStable(top, func(i, j int) bool { return top[i].Score > top[j].Score })
-	if len(top) > n {
-		top = top[:n]
+	for _, t := range texts {
+		m.Add(store.Item{Kind: kind, Text: t, Seen: 1, FirstAt: now, LastAt: now})
 	}
-	sort.SliceStable(top, func(i, j int) bool { return top[i].LastAt.After(top[j].LastAt) })
-	var lines []string
-	for _, e := range top {
-		lines = append(lines, "- ("+i18n.When(e.LastAt, now)+") "+e.Text)
+}
+
+// names maps the chat's member ids to their first names, for anonymising.
+func (u *Updater) names(chatID int64) []string {
+	members, err := u.db.Members(chatID)
+	if err != nil {
+		return nil
 	}
-	return strings.Join(lines, "\n")
+	var out []string
+	for _, m := range members {
+		if m.FirstName != "" {
+			out = append(out, m.FirstName)
+		}
+	}
+	return out
+}
+
+// Samples picks up to n recent human messages of 3–15 words as examples of
+// how the group writes, newest first, with the members' first names replaced
+// by «فلانی» and media tags, commands and links left out.
+func Samples(msgs []store.Message, names []string, n int) []string {
+	var out []string
+	seen := map[string]bool{}
+	for i := len(msgs) - 1; i >= 0 && len(out) < n; i-- {
+		m := msgs[i]
+		t := strings.TrimSpace(m.Text)
+		if m.FromBot || t == "" || strings.HasPrefix(t, "[") || strings.HasPrefix(t, "/") || strings.Contains(t, "http") {
+			continue
+		}
+		words := strings.Fields(t)
+		if len(words) < 3 || len(words) > 15 {
+			continue
+		}
+		for _, name := range names {
+			if len([]rune(name)) >= 3 {
+				t = replaceWord(t, name, i18n.Someone)
+			}
+		}
+		if f := text.Fold(t); seen[f] {
+			continue
+		} else {
+			seen[f] = true
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+// replaceWord replaces whole-word occurrences of name in t.
+func replaceWord(t, name, with string) string {
+	fields := strings.Fields(t)
+	fn := text.Fold(name)
+	for i, w := range fields {
+		if text.Fold(strings.Trim(w, "،,.!?؟:")) == fn {
+			fields[i] = with
+		}
+	}
+	return strings.Join(fields, " ")
 }

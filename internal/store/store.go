@@ -1,5 +1,6 @@
-// Package store is the database of hooshang: chats, members with their memory profiles, recent
-// messages and the audit log of memory edits. It is built on kvutil over Badger.
+// Package store is the database of hooshang: chats, members, the memories of members, the
+// group and the bot itself, recent messages, the media cache and the audit logs. It is built on
+// kvutil over Badger.
 package store
 
 import (
@@ -21,6 +22,8 @@ import (
 	"github.com/ehsanranjbar/kvutil/kv/badgerkv"
 	"github.com/ehsanranjbar/kvutil/store/record"
 	"github.com/ehsanranjbar/kvutil/store/typed"
+
+	"github.com/ehsanranjbar/hooshang/internal/rag"
 )
 
 // ErrNotFound is returned when a chat or member does not exist.
@@ -43,6 +46,7 @@ type Chat struct {
 
 	MsgsSinceGroupUpdate int       // messages since the group memory was last updated
 	GroupUpdatedAt       time.Time // when the group memory was last updated
+	MsgsSinceSelfUpdate  int       // the bot's own messages since its self memory was last updated
 
 	LastGreetingAt  time.Time   // when the bot last answered a صبح/شب بخیر here
 	LastBotQuestion BotQuestion // the question the bot last asked someone, so their next message counts as an answer
@@ -60,27 +64,6 @@ type BotQuestion struct {
 	At     time.Time
 }
 
-// Item is one remembered thing.
-type Item struct {
-	Text   string
-	Locked bool // written by the admin; the updater must keep it unchanged
-}
-
-// Profile is what the bot remembers about a member, in one chat.
-type Profile struct {
-	Nickname       string
-	NicknameLocked bool // set by the admin; the updater must keep it
-	Summary        string
-	SummaryLocked  bool // set by the admin; the updater must keep it
-	Facts          []Item
-	Interests      []Item
-	Quirks         []Item
-	Relationships  []Item
-	Boundaries     []Item
-	Orders         []Item   // the admin's standing orders on how to treat this member; only the admin changes them
-	Suppressed     []string // removed by the admin: the updater must not add these again
-}
-
 // Member is a member of a chat. Its id, (chatID, userID), is its key.
 //
 // The id is ALSO stored in the value on purpose. Do not add `msgpack:"-"`: kvutil hands the
@@ -91,13 +74,16 @@ type Member struct {
 	FirstName        string
 	LastName         string
 	Username         string
-	Profile          Profile
 	NoTease          bool
 	Ignored          bool // /ignoreme: the bot does not read, store or talk about this member
-	MsgsSinceUpdate  int
+	Premium          bool
+	LanguageCode     string
+	MsgsSinceUpdate  int // the member's messages since their memory was last updated
 	LastSeen         time.Time
-	ProfileUpdatedAt time.Time
+	ProfileUpdatedAt time.Time // when their memory was last updated by the extractor
 	LastGreetedAt    time.Time // when the bot last answered this member's صبح/شب بخیر
+	SeededAt         time.Time // when their Telegram profile (photos, bio) was last read
+	Style            Style     // what their messages look like (counted, not extracted)
 }
 
 func (m *Member) GetId() Key   { return m.ID }
@@ -127,24 +113,14 @@ type Message struct {
 // Engagement is how much a message caught the group's attention.
 func (m *Message) Engagement() int { return 2*m.Reactions + m.Replies }
 
-// GroupEvent is one remembered topic or event of a group. It expires a TTL
-// after LastAt, so a topic that keeps coming back stays remembered.
-type GroupEvent struct {
-	Text    string
-	Score   int // accumulated engagement of the messages it is based on
-	FirstAt time.Time
-	LastAt  time.Time
-	ID      int64 `msgpack:"-"` // its key: FirstAt in unix nanoseconds; set on read
-}
-
 // Edit is one memory edit made by the admin.
 type Edit struct {
 	AdminID int64
 	UserID  int64 // the member whose memory was edited
 	Request string
 	Ops     string // JSON of the operations, as the LLM gave them
-	Before  Profile
-	After   Profile
+	Before  Memory
+	After   Memory
 }
 
 // ModEntry is one moderation action of the admin, kept as an audit log.
@@ -170,11 +146,18 @@ type DB struct {
 	members    *record.Store[Key, Member]
 	byUsername *index.FieldIndex[Key, Member, codec.Pair[int64, string]] // (chatID, lowercase username) -> member
 	messages   *typed.Store[Key, Message]
+	memories   *typed.Store[Key, Memory]
 	edits      *typed.Store[Key, Edit]
-	events     *typed.Store[Key, GroupEvent]
-	terms      *typed.Store[Key, Term]
 	media      *typed.Store[Key, MediaDesc]
 	modLog     *typed.Store[Key, ModEntry]
+
+	// Retrieval (RAG): archived messages and their vectors, item and media vectors.
+	archive       *typed.Store[Key, Archived]
+	archiveByUser *typed.Store[Key3, struct{}]
+	msgVectors    *typed.Store[Key, rag.Vector]
+	itemVectors   *typed.Store[Key3, rag.Vector]
+	mediaVectors  *typed.Store[Key, rag.Vector]
+	meta          *typed.Store[string, EmbeddingMeta]
 }
 
 // Open opens the Badger database in dir. Messages expire after retention.
@@ -215,13 +198,19 @@ func define(db kv.DB, retention time.Duration) (*DB, error) {
 				return []codec.Pair[int64, string]{codec.NewPair(m.ID.First, strings.ToLower(m.Username))}, nil
 			}))
 	d.messages = typed.New[Key, Message](ks.Prefix("messages"))
+	d.memories = typed.New[Key, Memory](ks.Prefix("memories"))
 	d.edits = typed.New[Key, Edit](ks.Prefix("memory_edits"))
-	d.events = typed.New[Key, GroupEvent](ks.Prefix("group_events"))
-	d.terms = typed.New[Key, Term](ks.Prefix("terms"))
 	d.media = typed.New[Key, MediaDesc](ks.Prefix("media"))
 	d.modLog = typed.New[Key, ModEntry](ks.Prefix("mod_log"))
+	d.archive = typed.New[Key, Archived](ks.Prefix("archive"))
+	d.archiveByUser = typed.New[Key3, struct{}](ks.Prefix("archive_by_user"))
+	d.msgVectors = typed.New[Key, rag.Vector](ks.Prefix("msg_vectors"))
+	d.itemVectors = typed.New[Key3, rag.Vector](ks.Prefix("item_vectors"))
+	d.mediaVectors = typed.New[Key, rag.Vector](ks.Prefix("media_vectors"))
+	d.meta = typed.New[string, EmbeddingMeta](ks.Prefix("meta"))
 
-	report, err := ks.Migrate(context.Background(), d.chats, d.members, d.messages, d.edits, d.events, d.terms, d.media, d.modLog)
+	report, err := ks.Migrate(context.Background(), d.chats, d.members, d.messages, d.memories, d.edits, d.media, d.modLog,
+		d.archive, d.archiveByUser, d.msgVectors, d.itemVectors, d.mediaVectors, d.meta)
 	if err != nil {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
@@ -490,92 +479,6 @@ func (d *DB) UpdateMessage(chatID, messageID int64, fn func(*Message)) error {
 			err = s.Set(K(chatID, messageID), m)
 		}
 		return err
-	})
-}
-
-// ---------------------------------------------------------------- group memory
-
-// GroupEvents returns the group's events that are younger than ttl since they
-// were last seen (Badger drops them itself; this also covers memkv), oldest first.
-func (d *DB) GroupEvents(chatID int64, ttl time.Duration) ([]GroupEvent, error) {
-	var out []GroupEvent
-	cutoff := time.Now().Add(-ttl)
-	err := d.db.View(func(tx kv.Tx) error {
-		it, err := d.events.Instantiate(tx).Iterator(chatRange(chatID))
-		if err != nil {
-			return err
-		}
-		defer it.Close()
-		for ; it.Valid(); it.Next() {
-			v, err := it.Value()
-			if err != nil {
-				return err
-			}
-			k, err := it.Key()
-			if err != nil {
-				return err
-			}
-			if v.LastAt.Before(cutoff) {
-				continue
-			}
-			v.ID = k.Second
-			out = append(out, *v)
-		}
-		return nil
-	})
-	return out, err
-}
-
-// ReplaceGroupEvents writes the group's events: each one in events is stored
-// (a zero ID gets one from FirstAt) and expires ttl after its LastAt; every
-// stored event of the chat that is not in events is deleted. One transaction.
-func (d *DB) ReplaceGroupEvents(chatID int64, events []GroupEvent, ttl time.Duration) error {
-	return d.db.Update(func(tx kv.Tx) error {
-		s := d.events.Instantiate(tx)
-		keep := map[int64]bool{}
-		for i := range events {
-			e := events[i]
-			if e.ID == 0 {
-				e.ID = e.FirstAt.UnixNano()
-			}
-			for keep[e.ID] { // two new events in the same nanosecond
-				e.ID++
-			}
-			keep[e.ID] = true
-			left := ttl - time.Since(e.LastAt)
-			if left <= 0 {
-				continue
-			}
-			err := s.SetWithTTL(K(chatID, e.ID), &e, left)
-			if errors.Is(err, kv.ErrUnsupported) {
-				err = s.Set(K(chatID, e.ID), &e)
-			}
-			if err != nil {
-				return err
-			}
-		}
-		it, err := s.Iterator(chatRange(chatID))
-		if err != nil {
-			return err
-		}
-		var stale []int64
-		for ; it.Valid(); it.Next() {
-			k, err := it.Key()
-			if err != nil {
-				it.Close()
-				return err
-			}
-			if !keep[k.Second] {
-				stale = append(stale, k.Second)
-			}
-		}
-		it.Close()
-		for _, id := range stale {
-			if err := s.Delete(K(chatID, id)); err != nil {
-				return err
-			}
-		}
-		return nil
 	})
 }
 

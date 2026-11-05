@@ -57,7 +57,17 @@ func main() {
 	}
 
 	client := llm.New(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Timeout)
-	updater := newUpdater(cfg, db, client, logger)
+	me, err := tg.GetMe(context.Background())
+	if err != nil {
+		logger.Error("telegram getMe", "err", err)
+		os.Exit(1)
+	}
+	var theBot *bot.Bot // set below; the updater's embed hook reaches it through this
+	updater := newUpdater(cfg, db, client, me.ID, func(chatID, entity int64, items []store.Item) {
+		if theBot != nil {
+			theBot.EmbedItems(chatID, entity, items)
+		}
+	}, logger)
 	faalImage, poemImage := newRenderers(cfg, logger)
 
 	deps := bot.Deps{
@@ -80,6 +90,7 @@ func main() {
 		logger.Error("create bot", "err", err)
 		os.Exit(1)
 	}
+	theBot = b
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -110,7 +121,7 @@ func main() {
 
 // newUpdater returns the memory updater, or nil when neither profiles nor
 // group memory is on (the bot then queues no memory work).
-func newUpdater(cfg *config.Config, db *store.DB, client llm.Client, logger *slog.Logger) *memory.Updater {
+func newUpdater(cfg *config.Config, db *store.DB, client llm.Client, botID int64, embed func(int64, int64, []store.Item), logger *slog.Logger) *memory.Updater {
 	f := cfg.Features
 	if !f.Profiles.On() && !f.GroupMemory.On() {
 		return nil
@@ -122,9 +133,13 @@ func newUpdater(cfg *config.Config, db *store.DB, client llm.Client, logger *slo
 		MaxTokens:       cfg.LLM.MaxTokens,
 		JSONSchema:      cfg.LLM.JSONSchema,
 		Group:           groupConfig(cfg),
+		Embed:           embed,
 	}
 	if p := f.Profiles; p.On() {
 		uc.ContextMessages, uc.MaxItems = p.ContextMessages, p.MaxItems
+		if p.SelfEvery > 0 {
+			uc.BotID = botID
+		}
 	}
 	return memory.NewUpdater(db, client, cfg.LLM.MemoryModel, uc, logger)
 }
@@ -186,5 +201,9 @@ func groupConfig(cfg *config.Config) memory.GroupConfig {
 	if !g.On() {
 		return memory.GroupConfig{}
 	}
-	return memory.GroupConfig{TTL: g.TTL, MaxItems: g.MaxItems}
+	gc := memory.GroupConfig{TTL: g.TTL, MaxItems: g.MaxItems}
+	if p := cfg.Features.Profiles; p.On() {
+		gc.Samples = p.StyleSamples
+	}
+	return gc
 }

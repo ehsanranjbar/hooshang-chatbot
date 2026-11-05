@@ -122,6 +122,9 @@ func (b *Bot) recordSentText(chatID int64, msg *telego.Message, text string) {
 	_ = b.deps.DB.UpdateChat(chatID, func(c *store.Chat) {
 		c.LastBotAt = date
 		c.MsgsSinceBot = 0
+		if !strings.HasPrefix(text, "[") {
+			c.MsgsSinceSelfUpdate++
+		}
 	})
 }
 

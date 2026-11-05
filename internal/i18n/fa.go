@@ -119,6 +119,9 @@ func Ago(days int) string {
 	}
 }
 
+// PersianDigits renders n with Persian digits.
+func PersianDigits(n int) string { return persianDigits(n) }
+
 func persianDigits(n int) string {
 	const digits = "۰۱۲۳۴۵۶۷۸۹"
 	d := []rune(digits)
@@ -137,4 +140,40 @@ func persianDigits(n int) string {
 var (
 	MorningGreetings = []string{"صبح بخیر", "صبحتون بخیر", "صبح‌تون بخیر", "صبح همگی بخیر", "صبح به خیر", "روز بخیر", "روزتون بخیر", "ظهر بخیر"}
 	NightGreetings   = []string{"شب بخیر", "شبتون بخیر", "شب‌تون بخیر", "شب همگی بخیر", "شب به خیر", "شب خوش", "بخوابیم", "رفتم بخوابم", "خوابم میاد"}
+)
+
+// KindTitles are the Persian titles of the memory item kinds, for /me and the
+// prompts.
+var KindTitles = map[string]string{
+	"nickname":     "لقب",
+	"summary":      "خلاصه",
+	"fact":         "دانسته‌ها",
+	"interest":     "علاقه‌مندی‌ها",
+	"quirk":        "عادت‌ها",
+	"relationship": "رابطه‌ها",
+	"boundary":     "مرزها",
+	"order":        "دستورهای ادمین",
+	"episode":      "اتفاق‌های اخیر",
+	"stance":       "نظرها",
+	"joke":         "شوخی‌های تکراری",
+	"look":         "ظاهر",
+	"event":        "اتفاق‌های گروه",
+	"term":         "اصطلاح‌ها",
+	"promise":      "قول‌ها",
+	"sample":       "نمونه‌ها",
+}
+
+// Style phrases: how a member writes, from the counted stats.
+const (
+	StyleShort      = "پیام‌های کوتاه"
+	StyleLong       = "پیام‌های بلند"
+	StyleEmoji      = "پر از ایموجی"
+	StyleNight      = "شب‌فعال"
+	StyleMorning    = "صبح‌فعال"
+	StyleLaughs     = "می‌خنده با %s"
+	StyleTalksTo    = "بیشتر با %s حرف می‌زنه"
+	StyleReplyEvery = "به همه جواب می‌ده"
+	BioPrefix       = "بیو: "
+	Someone         = "فلانی"
+	BirthdayPrefix  = "تولد: "
 )

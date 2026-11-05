@@ -38,17 +38,18 @@ type fakeTG struct {
 	animations []*telego.SendAnimationParams
 
 	// Moderation calls, recorded in order; modErr makes every one of them fail.
-	bans         []*telego.BanChatMemberParams
-	unbans       []*telego.UnbanChatMemberParams
-	restricts    []*telego.RestrictChatMemberParams
-	deletes      []*telego.DeleteMessageParams
-	bulkDeletes  []*telego.DeleteMessagesParams
-	pins         []*telego.PinChatMessageParams
-	unpins       []*telego.UnpinChatMessageParams
-	photoLookups []*telego.GetUserProfilePhotosParams
-	chatLookups  []*telego.GetChatParams
-	modErr       error
-	chatInfo     *telego.ChatFullInfo // returned by GetChat
+	bans          []*telego.BanChatMemberParams
+	unbans        []*telego.UnbanChatMemberParams
+	restricts     []*telego.RestrictChatMemberParams
+	deletes       []*telego.DeleteMessageParams
+	bulkDeletes   []*telego.DeleteMessagesParams
+	pins          []*telego.PinChatMessageParams
+	unpins        []*telego.UnpinChatMessageParams
+	photoLookups  []*telego.GetUserProfilePhotosParams
+	chatLookups   []*telego.GetChatParams
+	modErr        error
+	chatInfo      *telego.ChatFullInfo      // returned by GetChat
+	profilePhotos *telego.UserProfilePhotos // returned by GetUserProfilePhotos (nil = none)
 
 	nextMsgID int
 }
@@ -260,6 +261,9 @@ func (f *fakeTG) GetUserProfilePhotos(_ context.Context, p *telego.GetUserProfil
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.photoLookups = append(f.photoLookups, p)
+	if f.profilePhotos != nil {
+		return f.profilePhotos, nil
+	}
 	return &telego.UserProfilePhotos{}, nil
 }
 

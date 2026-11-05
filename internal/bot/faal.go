@@ -4,7 +4,6 @@ import (
 	"context"
 	"math/rand/v2"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"github.com/mymmrac/telego"
@@ -110,14 +109,11 @@ func (b *Bot) runFaalTabir(ctx context.Context, chatID int64, askerID int64, poe
 	if mem, err := b.deps.DB.GetMember(chatID, askerID); err == nil && mem != nil {
 		asker = displayName(mem)
 		if b.deps.Cfg.Features.Profiles.On() {
-			profile = memory.Render(mem.Profile)
+			m, _ := b.deps.DB.GetMemory(chatID, askerID)
+			profile = memory.Render(m)
 		}
 	}
-	sys, _ := prompts.System(prompts.SystemData{
-		Name:     b.deps.Cfg.Bot.Name,
-		Language: b.deps.Cfg.Bot.Language,
-		Now:      prompts.FormatNow(time.Now()),
-	})
+	sys := b.systemPrompt(chatID)
 	task, err := prompts.FaalTabir(prompts.FaalData{
 		Language: b.deps.Cfg.Bot.Language,
 		Poem:     ganjoor.Format(poem, 0),

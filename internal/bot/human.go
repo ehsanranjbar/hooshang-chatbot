@@ -12,6 +12,7 @@ import (
 	"github.com/mymmrac/telego"
 
 	"github.com/ehsanranjbar/hooshang/internal/config"
+	"github.com/ehsanranjbar/hooshang/internal/memory"
 	"github.com/ehsanranjbar/hooshang/internal/prompts"
 	"github.com/ehsanranjbar/hooshang/internal/store"
 )
@@ -35,8 +36,22 @@ func (b *Bot) systemPrompt(chatID int64) string {
 		Persona:  c.Persona.Text,
 		Notes:    c.Persona.Notes,
 		Mood:     prompts.MoodPhrase(b.moodOfDay(chatID, time.Now())),
+		Samples:  b.styleSamples(chatID),
 	})
 	return sys
+}
+
+// styleSamples renders the group's anonymised sample messages, if kept.
+func (b *Bot) styleSamples(chatID int64) string {
+	p := b.deps.Cfg.Features.Profiles
+	if !p.On() || p.StyleSamples <= 0 {
+		return ""
+	}
+	mem, err := b.deps.DB.GetMemory(chatID, store.GroupEntity)
+	if err != nil {
+		return ""
+	}
+	return memory.RenderSamples(mem)
 }
 
 // moodOfDay picks the mood of the day for a chat: the same all day, different

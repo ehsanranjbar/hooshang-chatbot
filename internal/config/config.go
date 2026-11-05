@@ -30,6 +30,12 @@ type Config struct {
 		Timeout     time.Duration `yaml:"timeout"`     // default 120s
 		Tools       bool          `yaml:"tools"`       // default true
 		JSONSchema  bool          `yaml:"json_schema"` // send response_format json_schema for memory extraction; default false
+		// EmbeddingModel is the embedding model served next to the chat model
+		// (e.g. text-embedding-bge-m3); "" turns retrieval (features.rag) off.
+		EmbeddingModel string `yaml:"embedding_model"`
+		// ContextTokens is the context window the chat model is loaded with;
+		// prompts are trimmed to fit under it minus max_tokens. Default 32768.
+		ContextTokens int `yaml:"context_tokens"`
 	} `yaml:"llm"`
 	Bot struct {
 		Name                string         `yaml:"name"` // default "هوشنگ"
@@ -94,6 +100,7 @@ func defaults() *Config {
 	c.LLM.MaxTokens = 2048
 	c.LLM.Timeout = 120 * time.Second
 	c.LLM.Tools = true
+	c.LLM.ContextTokens = 32768
 	c.Bot.Name = "هوشنگ"
 	c.Bot.Aliases = []string{"هوشی", "hooshang"}
 	c.Bot.Language = "fa"
@@ -186,6 +193,9 @@ func (c *Config) Validate() error {
 	}
 	if c.LLM.Timeout <= 0 {
 		return fmt.Errorf("llm.timeout must be > 0")
+	}
+	if c.LLM.ContextTokens < c.LLM.MaxTokens+2048 {
+		return fmt.Errorf("llm.context_tokens must be at least max_tokens + 2048, got %d", c.LLM.ContextTokens)
 	}
 	if c.Bot.HistoryMessages < 1 {
 		return fmt.Errorf("bot.history_messages must be >= 1, got %d", c.Bot.HistoryMessages)

@@ -1,6 +1,7 @@
 # Hooshang (هوشنگ) — implementation spec
 
-A Telegram group bot that chats in Persian. It keeps a memory profile of each member **per group**,
+A Telegram group bot that chats in Persian. It keeps a memory of each member **per group** (items with
+evidence), of the group and of itself,
 uses it to joke, tease and lightly flirt, reads Hafez faals and poems from Ganjoor, and lets the
 admin change its memory by plain conversation.
 
@@ -304,43 +305,57 @@ func Format(p *Poem, maxCouplets int) string      // see below
 
 ### 3.6 `memory`
 
+One model for everything remembered (`store.Memory`, keyed `(chatID, entity)`): a member (entity
+= user id), the group (`store.GroupEntity` = 0) and the bot itself (its user id). A memory has a
+nickname and summary (lockable), `Items` and `Suppressed` texts. An `Item` has an `ID`, a `Kind`,
+`Text`, `Note` (a term's meaning), `By`, `Locked`, `Seen`, `Score` (events), `FirstAt`, `LastAt`,
+`Expires` (zero = durable) and `Source` (up to 5 message ids).
+
+Kinds and their `memory.Policies`: members → `fact`, `interest`, `quirk`, `relationship`,
+`boundary` (durable, extractable), `episode` (extractable, 14 days), `stance`, `joke`
+(extractable), `order` (admin only), `look` (from profile photos, 90 days); the group → `event`
+(the group job, TTL `features.group_memory.ttl` from `LastAt`), `term` (anyone, LRU by `LastAt`),
+`sample` (the group job); the bot → `stance`, `joke`, `promise` (7 days).
+
 ```go
-// profile.go
-func Render(p store.Profile) string // compact Persian text for prompts; omits empty sections; Suppressed is never rendered
-func Merge(current, extracted store.Profile, maxItems int) store.Profile
-//   result = extracted, plus: every Locked item of current is kept (same section, same text, Locked=true);
-//   any item whose text matches Suppressed (normalized, case/space-insensitive) is dropped;
-//   duplicates removed; each section capped at maxItems (Locked first); Suppressed copied from current.
-func Sections() []string // "nickname","summary","facts","interests","quirks","relationships","boundaries"
-
-// ops.go — used by the admin edit_memory tool
-type Op struct { Action, Section, Text, OldText string } // Action: add | remove | replace
-func Apply(p store.Profile, ops []Op) (store.Profile, []string, error)
-//   add: append {Text, Locked:true} (nickname/summary: set the string)
-//   remove: delete items whose text contains OldText (or Text) after normalization, and add the removed text to Suppressed
-//   replace: like remove of OldText, then add of Text
-//   An unknown section/action, or a remove that matches nothing, returns an error naming it. The []string is a human-readable change list.
-
-// updater.go
-func NewUpdater(db *store.DB, c llm.Client, model string, cfg UpdaterConfig) *Updater
-type UpdaterConfig struct { ContextMessages, MaxItems int; Language string }
-func (u *Updater) Enqueue(chatID, userID int64) // non-blocking; deduplicated by (chat,user); drops if the queue (cap 64) is full
-func (u *Updater) Run(ctx context.Context)      // single worker, returns when ctx is done
-func (u *Updater) UpdateNow(ctx context.Context, chatID, userID int64) error // what the worker runs; tests call it directly
+func Merge(m *store.Memory, ext Extracted, kinds []string, now time.Time, maxItems int)
+//   drops kinds the extractor may not write and suppressed texts; a stored item with the same kind and
+//   folded text is re-observed only when the extraction cites a message it did not rest on (or cites
+//   nothing and the item is older than a day): Seen++, LastAt, sources merged, expiry pushed back;
+//   new items start at Seen 1 with the kind's TTL; items left out are kept; once-seen unlocked items
+//   unseen for 30 days are dropped; each kind is capped at maxItems (locked, then most seen, then most recent).
+func Apply(m *store.Memory, ops []Op, now time.Time) ([]string, error) // edit_memory: add (locked), remove (by item_id or text; suppresses), replace
+func Render(m store.Memory) string          // nickname, summary, one line per kind in RenderKinds (episodes dated); no orders/terms/events
+func RenderItems(m, items, now) string      // the same with a chosen subset (RAG)
+func RenderOrders / RenderSelf / RenderEvents / RenderSamples / RenderStyle
+func Samples(msgs, names, n) []string       // 3–15-word human messages, names → «فلانی», newest first
+func NewUpdater(db, c, model, UpdaterConfig{ContextMessages, MaxItems, Language, MaxTokens, JSONSchema, BotID, Group, Embed}, logger)
+func (u *Updater) Enqueue(chat, user) / EnqueueGroup(chat) / EnqueueSelf(chat) / Run(ctx)
+func (u *Updater) UpdateNow(ctx, chat, user) / UpdateGroupNow(ctx, chat) / UpdateSelfNow(ctx, chat)
 ```
 
-`UpdateNow` works like this:
+`UpdateNow` (a member): needs 3+ of their messages in the window; the prompt (`memory_extract.tmpl`)
+shows the known items as `kind: text` and the transcript as `[id] name: text` with the target's
+lines marked `>>`; the model returns `{"nickname","summary","items":[{"kind","text","msgs":[ids]}]}`
+(`extractSchema` when `json_schema` is on); `Merge` runs inside `UpdateMemory` against the current
+stored memory; then `Member.ProfileUpdatedAt`/`MsgsSinceUpdate` are reset and the items are handed to
+`Embed`. A failed call or invalid JSON keeps the old memory.
 
-1. Read the member and the `RecentMessages(chat, ContextMessages)`. If the member has fewer than 3
-   messages in that window, reset the counter and return.
-2. Build the prompt from the `memory_extract.tmpl` template. It takes the current profile as JSON
-   (sections as plain string lists, without the locked flags) and the transcript, with the target's
-   lines marked `>>`.
-3. Call the LLM with `Schema` (the profile schema with string arrays and strings) and temperature 0.2,
-   then parse with `ExtractJSON` and `json.Unmarshal`.
-4. On a parse failure, log a warning, reset `MsgsSinceUpdate` and return nil. The old profile is kept.
-5. In `UpdateMember`: `Merge(currentStored.Profile, extracted, MaxItems)`, set `ProfileUpdatedAt = now`
-   and `MsgsSinceUpdate = 0`.
+`UpdateSelfNow` (the bot): every `features.profiles.self_every` (20) of its own messages
+(`Chat.MsgsSinceSelfUpdate`), its lines and the lines they answered go to `self_extract.tmpl`, which
+returns stances, jokes and promises; rendered into the tasks as "What you yourself have said here before".
+
+`UpdateGroupNow`: see §6a; it also refreshes the `sample` items (`features.profiles.style_samples`).
+
+**Style (`store.Style`, `bot.countStyle`)**: counted per member on every message, no model: messages,
+words, messages with an emoji, laugh forms, messages per hour (Tehran), who they reply to (10 kept).
+`RenderStyle` makes one Persian line («پیام‌های کوتاه، پر از ایموجی، شب‌فعال، می‌خنده با خخخ، بیشتر
+با علی حرف می‌زنه») after 20 messages; it is appended to the member's profile in prompts.
+
+**Telegram seed (`bot/seed.go`, `features.profiles.seed`)**: a member's first message (or one after
+`refresh`) queues, on the describer's queue, a read of their profile: up to `photos` profile photos
+described by the vision model ("profile picture of a group member") into `look` items (90 days), and
+`getChat` for the bio («بیو: …») and birthday («تولد: ۱۴ آبان») as facts when Telegram exposes them.
 
 ### 3.7 `prompts`
 
@@ -725,59 +740,77 @@ The bot needs the matching Telegram admin rights (delete messages, ban users, pi
 - **Not included:** lifting a mute early (a mute simply ends at its `Until`), per-user warnings,
   and slow mode.
 
-## Data move (one-off, November 2026)
+## 6f-bis. Data reset (2026-11-05)
 
-The memory refactor will change how profiles, group events and terms are stored. The move is done
-with a dump file in two halves:
-
-1. **Export** (done): `scripts/migrate-2026-11/export` opens a data directory with the current
-   `store.Open` and writes `dump.json`: chats (id, title, muted, `ModActions`), members (chat,
-   user, names, username, `NoTease`, `Ignored`, the whole `Profile` with every section, its
-   `Locked` flags, `Orders` and `Suppressed`, `ProfileUpdatedAt`), group events, glossary terms and
-   the shared media cache. `go run ./scripts/migrate-2026-11/export -data ./data -out dump.json`
-   (stop the bot first; the file holds private data and is written with mode 0600).
-2. **Import** comes with the memory refactor, reading the same file.
+The memory refactor replaced `Profile`, `group_events` and `terms` with `memories` **without a
+migration**: the data directory is deleted and the bot starts fresh (the user's decision). The
+`members`, `messages`, `media` and `mod_log` stores kept their layout.
 
 ## 6a. Group memory
 
-A short memory of the topics and events **the group** cared about, alongside the member profiles.
+Events and style samples live as items of the group's memory (`store.GroupEntity`).
 
 - **Engagement:** each stored message counts `Reactions` (from `message_reaction` updates, or the
   anonymous `message_reaction_count`; both arrive only while the bot is a group **admin**) and
-  `Replies` (incremented when a reply to it is stored). `Engagement = 2·reactions + replies`.
-- **Updates:** `Chat.MsgsSinceGroupUpdate` counts group messages. At `features.group_memory.update_every` (50)
-  the memory updater gets a group job (user 0) and runs `UpdateGroupNow`:
-  1. It reads the member messages since `Chat.GroupUpdatedAt` (at least 10, else it resets and waits).
-  2. The prompt (`group_extract.tmpl`) has the remembered events with ids, and the new messages as
-     `[id] name: text {+engagement}`. The model returns
+  `Replies`. `Engagement = 2·reactions + replies`.
+- **Updates:** `Chat.MsgsSinceGroupUpdate` counts group messages. At `features.group_memory.update_every`
+  (50) the updater gets a group job and runs `UpdateGroupNow`:
+  1. It reads the member messages since `Chat.GroupUpdatedAt` (at least 10, else it resets and waits)
+     and refreshes the `sample` items (`memory.Samples`).
+  2. The prompt (`group_extract.tmpl`) has the remembered events with their item ids, and the new
+     messages as `[id] name: text {+engagement}`. The model returns
      `{"events":[{"text","msgs":[ids],"same_as":id|0}]}`, at most 5.
-  3. **Score = 1 + the engagement of the listed messages** (made-up ids count 0), so the ranking
-     rests on what the group did. `same_as` (or the same normalized text) updates an event:
-     text, `LastAt = now`, score added.
-  4. Events are sorted by score, capped at `max_items` (15), and written with `ReplaceGroupEvents`;
-     each expires `ttl` (a week) after its `LastAt`. Invalid output keeps the old events.
-- **Use:** with probability `prompt_chance` (0.3), the top `in_prompt` (4) events go into reply and
-  spontaneous prompts as `- (دیروز) …`, labeled background-only. The chance keeps the bot from
-  steering back to old topics.
+  3. **Score = 1 + the engagement of the listed messages** (made-up ids count 0). `same_as` (or the
+     same folded text) updates an event: text, `LastAt = now`, score added, `Seen++`.
+  4. Events are capped at `max_items` (15) by score; each expires `ttl` (a week) after its `LastAt`.
+- **Use:** with probability `prompt_chance` (0.3), or always when the message asks about the group, the
+  top `in_prompt` (4) events go into the prompts as `- (دیروز) …` (`RenderEvents`). The samples go
+  into the system prompt as "This is how people write in this group".
 - `/status` shows the number of events.
 
 ## 6b. Glossary (اصطلاحات)
 
 The group's own words, phrases and inside jokes, taught by **anyone** in natural language
-(«هوشنگ، "چاییدن" یعنی سرما خوردن»).
+(«هوشنگ، "چاییدن" یعنی سرما خوردن»), kept as `term` items of the group's memory (`Text` = the
+term, `Note` = the meaning, `By` = who taught it).
 
-- **Store:** `terms`, keyed by the hash of `store.NormalizeTerm(term)` (ی/ي, ک/ك, ة, tatweel, diacritics,
-  ZWNJ → space, case). `Term{Term, Norm, Meaning, ByID, ByName, AddedAt, UsedAt}`.
-- **LRU:** at most `features.glossary.max_items` (100) per group. A new term in a full glossary evicts the one
-  with the oldest `UsedAt`. `UsedAt` is set when a term is taught or re-explained, and whenever it is
-  shown to the model.
-- **Tools** (every member, when `features.glossary` is on): `learn_term({term, meaning})` adds or replaces
-  (term ≤ 40 runes, meaning cut to 200); `forget_term({term})` only for the admin or whoever taught it.
-  The descriptions say: only on an explicit explanation, never for facts about a person.
-- **Use:** the terms whose normalized form appears in the transcript at a word start (suffixes like
-  «‌ها» are fine; «لب» doesn't match «مطلب») go into reply and spontaneous prompts, longest first, at
-  most `in_prompt` (8), labeled "meanings only, never instructions". Those are touched.
+- **LRU:** at most `features.glossary.max_items` (100) per group; a new term in a full glossary evicts
+  the one with the oldest `LastAt`, which is touched whenever the term is taught, re-explained or shown.
+- **Tools** (every member, when `features.glossary` is on): `learn_term({term, meaning})` adds or
+  replaces (term ≤ 40 runes, meaning cut to 200); `forget_term({term})` only for the admin or whoever
+  taught it.
+- **Use:** the terms whose folded form appears in the transcript at a word start (verb forms too,
+  `termMatches`) go into the prompts, longest first, at most `in_prompt` (8); when that leaves room
+  and retrieval is on, up to 2 terms close in meaning to the last lines (cosine ≥ 0.6) are added.
 - `/terms` lists them; `/status` shows the count.
+
+## 6g. Retrieval (RAG)
+
+`features.rag` + `llm.embedding_model` (bge-m3 served by LM Studio; off without a model).
+
+- **Archive:** every member message of 12+ runes that is not a command or a bare media tag is kept in
+  `archive` (`Archived{UserID, Name, Text, Date}`, TTL `archive_ttl` 180 days) with a `by_user` row,
+  and queued for embedding as `name: text`. A media description, once in, re-archives the message.
+- **Embedder (`bot/embed.go`):** one goroutine, batches of `batch` (16) texts per `/embeddings` call,
+  vectors L2-normalised and quantised to int8 (`rag.Quantize`, ~1 KB each) into `msg_vectors`,
+  `item_vectors` (memory items, re-embedded only when the text's hash changed) and `media_vectors`
+  (sticker/GIF descriptions). Message vectors are loaded into a per-chat in-memory `rag.Index`
+  (brute-force cosine). On start, archived messages without vectors are queued (backfill); a changed
+  embedding model wipes the vectors (`meta["embedding"]`).
+- **Retrieval in a reply (`replyTask`):** one query vector per job (the trigger text plus the message
+  it replies to; a spontaneous job uses the last 3 human lines). `relatedMessages`: top `top_k` (5)
+  archived messages not in the transcript with cosine ≥ `min_score` (0.45), scored
+  `cos × (0.7 + 0.3·2^(−age/decay_days))`, rendered as "Older messages that may be relevant" with
+  Persian dates. `selectItems`: when a member's memory is bigger than a third of `profile_budget`,
+  every locked item, order, boundary and week-old episode is kept and the rest is ranked by cosine
+  until the share is full. `find_media`: lexical matches first, then media vectors (cosine ≥ 0.5).
+  `relatedTerms`: see §6b.
+- **Purge:** `/forgetme` and `/ignoreme` delete the member's archive rows, message vectors (through
+  `archive_by_user`) and item vectors, and evict them from the index.
+- **Token guard (`replyRequest`):** `llm.context_tokens` (32768) − `max_tokens` − the tool schemas is
+  the budget (`prompts.EstimateTokens`, 3 runes per token). Over it, the task is rebuilt at trim
+  levels: no related messages → no random profiles and no group memory → the transcript cut to its
+  last third (the trigger and the replied-to message always stay).
 
 ## 7. Persona and behavior (`system.tmpl`, `bot.persona`, `bot.human`)
 

@@ -2,11 +2,14 @@ package store
 
 import (
 	"errors"
+	"hash/fnv"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/ehsanranjbar/kvutil/kv"
+
+	"github.com/ehsanranjbar/hooshang/internal/text"
 )
 
 // MediaDesc is the model's description of a sticker or GIF, shared by every
@@ -24,7 +27,11 @@ type MediaDesc struct {
 }
 
 // mediaKey is the key of a file_unique_id: (0, its FNV-64a hash).
-func mediaKey(uniqueID string) Key { return termKey(0, "media:"+uniqueID) }
+func mediaKey(uniqueID string) Key {
+	h := fnv.New64a()
+	h.Write([]byte("media:" + uniqueID))
+	return K(0, int64(h.Sum64()))
+}
 
 // GetMediaDesc returns the cached description, or ErrNotFound.
 func (d *DB) GetMediaDesc(uniqueID string) (*MediaDesc, error) {
@@ -83,7 +90,7 @@ func setMedia(s interface {
 // words match the description. Better matches first, then the most used.
 // An empty query returns the most used.
 func (d *DB) SearchMedia(kind, query string, n int) ([]MediaDesc, error) {
-	terms := strings.Fields(NormalizeTerm(query))
+	terms := strings.Fields(text.Fold(query))
 	type hit struct {
 		m     MediaDesc
 		score int
@@ -103,7 +110,7 @@ func (d *DB) SearchMedia(kind, query string, n int) ([]MediaDesc, error) {
 			if v.FileID == "" || (kind != "" && v.Kind != kind) {
 				continue
 			}
-			text := NormalizeTerm(v.Text)
+			text := text.Fold(v.Text)
 			emoji := strings.ReplaceAll(v.Emoji, "️", "")
 			score := 0
 			for _, t := range terms {

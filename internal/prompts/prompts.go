@@ -6,6 +6,7 @@ package prompts
 import (
 	"embed"
 	"github.com/ehsanranjbar/hooshang/internal/i18n"
+	"github.com/ehsanranjbar/hooshang/internal/store"
 	"strings"
 	"text/template"
 	"time"
@@ -23,7 +24,14 @@ var (
 	groupExtractTmpl  = template.Must(template.ParseFS(fs, "group_extract.tmpl"))
 	mediaDescribeTmpl = template.Must(template.ParseFS(fs, "media_describe.tmpl"))
 	reactionTmpl      = template.Must(template.ParseFS(fs, "reaction_task.tmpl"))
+	selfExtractTmpl   = template.Must(template.ParseFS(fs, "self_extract.tmpl"))
 )
+
+// SelfExtract renders the bot's self-memory extraction prompt (Items, Kinds,
+// Transcript and Language of ExtractData).
+func SelfExtract(d ExtractData) (string, error) {
+	return exec(selfExtractTmpl, d)
+}
 
 // ReactionTask renders the spontaneous reaction task (uses Orders, Glossary,
 // Transcript and Emojis of TaskData).
@@ -67,6 +75,7 @@ type SystemData struct {
 	Persona  string   // bot.persona.text: replaces the built-in identity paragraph when set
 	Notes    []string // bot.persona.notes: appended as extra lines
 	Mood     string   // the mood of the day, as a short English phrase (may be empty)
+	Samples  string   // how the group writes: a few anonymised member messages, one per line (may be empty)
 }
 
 // Moods are the built-in moods a day is drawn from, as the phrase that
@@ -108,15 +117,18 @@ type TaskData struct {
 	Target     string // spontaneous/roast target name (may be empty)
 	Bubbles    int    // most chat bubbles the answer may be split into (0 or 1: no splitting)
 	Mentions   bool   // profiles carry @username/id: explain how to mention members
+	Self       string // what the bot has said here before: stances, running jokes, promises (may be empty)
+	Related    string // older messages retrieved as relevant to the >> message (may be empty)
 }
 
-// ExtractData is the input of the memory extract prompt.
+// ExtractData is the input of the memory extract prompts.
 type ExtractData struct {
 	Language   string
 	TargetName string
-	// Profile is the current profile rendered as a JSON object (sections as
-	// plain string lists, without the locked flags).
-	Profile    string
+	Nickname   string // the current nickname (may be empty)
+	Summary    string // the current summary (may be empty)
+	Items      string // the current items, one "kind: text" per line (may be empty)
+	Kinds      string // the kinds the model may return, comma-separated
 	Transcript string // recent messages, the target's lines marked with >>
 }
 
@@ -211,4 +223,25 @@ func FormatNow(t time.Time) string {
 	}
 	t = t.In(loc)
 	return i18n.FormatDateTime(t) + " (" + t.Format("2006-01-02 15:04") + ")"
+}
+
+// Compact renders a list of items plus one more as "text؛ text؛ …", for
+// measuring how much of a budget they take.
+func Compact(items []store.Item, extra store.Item) string {
+	var sb strings.Builder
+	for _, it := range items {
+		sb.WriteString(it.Text)
+		sb.WriteString("؛ ")
+	}
+	sb.WriteString(extra.Text)
+	return sb.String()
+}
+
+// charsPerToken is a rough tokenizer ratio for mixed Persian/English text,
+// on the conservative side.
+const charsPerToken = 3.0
+
+// EstimateTokens estimates how many tokens a text costs.
+func EstimateTokens(s string) int {
+	return int(float64(len([]rune(s)))/charsPerToken) + 1
 }

@@ -44,7 +44,7 @@ func TestSwitchedOffCommandsSayTheyAreOff(t *testing.T) {
 func TestSwitchedOnCommandsStillWork(t *testing.T) {
 	b, db, tg, _ := replyBot(t, 100)
 	b.deps.Cfg.Features.Glossary = &config.GlossaryFeature{Enabled: true, MaxItems: 10, InPrompt: 3}
-	_, _ = db.PutTerm(testChat, store.Term{Term: "چاییدن", Meaning: "سرما خوردن"}, 10)
+	addTerm(db, testChat, "چاییدن", "سرما خوردن", 0)
 	if got := command(t, b, tg, boss, "/terms"); !strings.Contains(got, "چاییدن") {
 		t.Errorf("/terms = %q", got)
 	}
@@ -98,10 +98,8 @@ func TestToolsFollowTheirFeatures(t *testing.T) {
 
 func TestProfilesOff(t *testing.T) {
 	b, db, _, fake := replyBot(t, 100, llm.Response{Content: "باشه"}, llm.Response{Content: "تعبیر خوبی داره"})
-	_, _ = db.UpdateMember(testChat, ali.ID, func(m *store.Member) {
-		m.Profile.Facts = []store.Item{{Text: "عاشق فوتبال"}}
-		m.Profile.Orders = []store.Item{{Text: "با علی شوخی نکن"}}
-	})
+	addItems(db, testChat, ali.ID, store.KindFact, false, "عاشق فوتبال")
+	addItems(db, testChat, ali.ID, store.KindOrder, true, "با علی شوخی نکن")
 	b.deps.Cfg.Features.Profiles = nil
 
 	// No profiles and no orders in the prompt, no admin rules, no memory tools.

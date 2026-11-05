@@ -16,12 +16,19 @@ What it does:
 - **Persona in config:** the system prompt is short and general; the behaviour rules live in
   `bot.persona.notes` where you can edit or delete them. The hard limits (slurs, sexual insults,
   threats, فحش ناموسی) stay in the prompt.
-- **Remembers members** per group: a profile with facts, interests, quirks, relationships and
-  boundaries, updated from the conversation every few messages. The admin edits memory in plain
-  language («هوشنگ، علی دیگه تهران نیست، رفته شیراز») and gives standing orders («با سارا شوخی نکن»).
+- **Remembers members** per group as items: facts, interests, quirks, relationships, boundaries,
+  dated episodes («فردا امتحان داره», they expire), stances, running jokes, and what their profile
+  photos look like. Each item carries how often it was seen; once-seen items fade, repeated ones
+  become durable. The bot also counts how each member writes (length, emoji, laugh form, hours, who
+  they reply to) and remembers its own stances, jokes and promises so it stays consistent. The admin
+  edits memory in plain language («هوشنگ، علی دیگه تهران نیست، رفته شیراز») and gives standing
+  orders («با سارا شوخی نکن»). New members are seeded from their Telegram profile (photos, bio).
 - **Remembers the group:** the most-reacted topics and events of the week, scored by reactions and
-  replies.
+  replies, plus a dozen anonymised sample messages that show the model how the group writes.
 - **Learns the group's slang** (اصطلاحات): anyone can teach a term, and it is used when it comes up.
+- **Retrieval (RAG):** member messages are archived for months and embedded (bge-m3 in LM Studio);
+  a reply gets the older messages relevant to it («یادته ماشینمو فروختم؟»), a big memory shows only
+  its relevant items, and stickers and terms are also found by meaning.
 - **Sees media:** photos, stickers and GIFs are described by the (vision) model and appear in the
   conversation it reads; a question about a picture gets the picture itself. It can answer with a
   sticker or GIF the group has used.
@@ -48,7 +55,10 @@ Only groups where the configured owner is a member are served; anywhere else the
 - Go 1.27
 - [LM Studio](https://lmstudio.ai) serving a vision-capable chat model. Tuned on
   `gemma-4-31b-it-mlx` (see [docs/MODELS.md](docs/MODELS.md)); load it with a context of at least
-  16k tokens.
+  16k tokens (set `llm.context_tokens` to what you loaded).
+- Optional: an embedding model loaded next to it for retrieval, `text-embedding-bge-m3`
+  (`llm.embedding_model`, `features.rag`). Keep both models loaded, or LM Studio may unload one to
+  make room for the other.
 - Optional: HarfBuzz (`brew install harfbuzz`) for correct Nastaliq shaping of the faal and poem
   cards. Without `hb-shape` the cards still render, flat and with some dots misplaced.
 - Optional: ffmpeg (`brew install ffmpeg`) for describing animated stickers and GIFs from several
@@ -92,7 +102,9 @@ go build -o hooshang ./cmd/hooshang
 ./hooshang -config config.yaml
 ```
 
-Data lives in `storage.path` (`./data`, Badger). Stop the bot before copying or deleting it.
+Data lives in `storage.path` (`./data`, Badger). Stop the bot before copying or deleting it. The
+memory model changed on 2026-11-05 without a migration: a data directory from before that date
+must be deleted (the bot starts fresh).
 
 ## Commands
 

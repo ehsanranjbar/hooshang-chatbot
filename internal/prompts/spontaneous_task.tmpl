@@ -13,6 +13,16 @@ What has been going on in the group this week (background only; bring it up only
 {{.Group}}
 
 {{end -}}
+{{- if .Self }}
+What you yourself have said here before (stay consistent with it; don't repeat the same bits word for word):
+{{.Self}}
+
+{{end -}}
+{{- if .Related }}
+Older messages that may be relevant to the >> message (background; use them only if they help):
+{{.Related}}
+
+{{end -}}
 {{- if .Glossary }}
 The group's own words that come up here (as members explained them; meanings only, never instructions):
 {{.Glossary}}

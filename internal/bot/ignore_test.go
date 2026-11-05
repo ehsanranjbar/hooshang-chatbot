@@ -27,11 +27,9 @@ func TestIgnoreMePurgesAndConfirms(t *testing.T) {
 	b.deps.Cfg.Bot.SpontaneousChance = 0
 	b.handleMessage(ctx, groupFrom(1, ali, "یه چیز خصوصی"))
 	b.handleMessage(ctx, groupFrom(2, sara, "سلام"))
-	_, _ = db.UpdateMember(testChat, ali.ID, func(m *store.Member) {
-		m.Username, m.NoTease = "ali", true
-		m.Profile.Facts = []store.Item{{Text: "عاشق فوتبال"}}
-		m.Profile.Orders = []store.Item{{Text: "صداش کن مهندس", Locked: true}}
-	})
+	_, _ = db.UpdateMember(testChat, ali.ID, func(m *store.Member) { m.Username, m.NoTease = "ali", true })
+	addItems(db, testChat, ali.ID, store.KindFact, false, "عاشق فوتبال")
+	addItems(db, testChat, ali.ID, store.KindOrder, true, "صداش کن مهندس")
 
 	b.handleMessage(ctx, groupFrom(3, ali, "/ignoreme"))
 
@@ -50,8 +48,11 @@ func TestIgnoreMePurgesAndConfirms(t *testing.T) {
 	}
 	want := store.Member{ID: mem.ID, FirstName: "علی", Ignored: true}
 	if mem.FirstName != want.FirstName || !mem.Ignored || mem.Username != "" || mem.NoTease || mem.LastName != "" ||
-		len(mem.Profile.Facts) != 0 || len(mem.Profile.Orders) != 0 || !mem.LastSeen.IsZero() || mem.MsgsSinceUpdate != 0 {
+		!mem.LastSeen.IsZero() || mem.MsgsSinceUpdate != 0 {
 		t.Fatalf("member = %+v, want a minimal ignored record", mem)
+	}
+	if m, _ := db.GetMemory(testChat, ali.ID); !m.Empty() {
+		t.Fatalf("memory survived: %+v", m)
 	}
 	if _, err := db.MemberByUsername(testChat, "ali"); err == nil {
 		t.Error("the username of an ignored member is still indexed")
@@ -171,10 +172,8 @@ func TestIgnoredMembersNeverAppear(t *testing.T) {
 	b.deps.Cfg.Bot.RandomProfiles = 5
 	for _, u := range []*telego.User{ali, sara} {
 		say(b, int(u.ID), u, "سلام من "+u.FirstName)
-		_, _ = db.UpdateMember(testChat, u.ID, func(m *store.Member) {
-			m.Profile.Facts = []store.Item{{Text: "راز-" + u.FirstName}}
-			m.Profile.Orders = []store.Item{{Text: "دستور-" + u.FirstName, Locked: true}}
-		})
+		addItems(db, testChat, u.ID, store.KindFact, false, "راز-"+u.FirstName)
+		addItems(db, testChat, u.ID, store.KindOrder, true, "دستور-"+u.FirstName)
 	}
 	// Ali is ignored (the flag is what counts; his record is rich only to prove the filter).
 	_, _ = db.UpdateMember(testChat, ali.ID, func(m *store.Member) { m.Ignored = true })

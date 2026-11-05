@@ -40,6 +40,11 @@ type Deps struct {
 	PoemImage *faalimg.Renderer
 }
 
+// EmbedItems queues the embedding of memory items (the updater's hook).
+func (b *Bot) EmbedItems(chatID, entity int64, items []store.Item) {
+	b.embedItems(chatID, entity, items)
+}
+
 // Bot is the hooshang Telegram bot.
 type Bot struct {
 	deps        Deps
@@ -49,10 +54,11 @@ type Bot struct {
 	workers     *workers
 	rollFn      func() float64                             // nil = math/rand; DumpPrompt pins it
 	sleepFn     func(ctx context.Context, d time.Duration) // nil = a real wait; tests skip it
-	describer   *enricher                                  // background media descriptions; nil until Run (and without features.media)
-	transcriber *enricher                                  // background voice transcriptions; nil until Run (and without features.voice)
-	ffOnce      sync.Once                                  // resolves ffmpeg and ffprobe on first use
-	ffmpeg      string                                     // "" = not installed
+	describer   *enricher
+	embedder    *embedder // nil when retrieval is off                                  // background media descriptions; nil until Run (and without features.media)
+	transcriber *enricher // background voice transcriptions; nil until Run (and without features.voice)
+	ffOnce      sync.Once // resolves ffmpeg and ffprobe on first use
+	ffmpeg      string    // "" = not installed
 	ffprobe     string
 	accessMu    sync.Mutex
 	accessCache map[int64]accessEntry
@@ -69,6 +75,7 @@ func New(d Deps, logger *slog.Logger) (*Bot, error) {
 		accessCache: make(map[int64]accessEntry),
 	}
 	b.workers = newWorkers(b)
+	b.embedder = newEmbedder(b)
 	// GetMe needs the concrete *telego.Bot (it is not on the TG interface).
 	if tb, ok := d.TG.(*telego.Bot); ok {
 		me, err := tb.GetMe(context.Background())
@@ -114,12 +121,23 @@ func (b *Bot) Run(ctx context.Context) error {
 	for _, e := range enrichers {
 		go e.run(ectx)
 	}
+	var embedDone chan struct{}
+	if b.embedder != nil {
+		embedDone = b.embedder.done
+		go b.embedder.run(ectx)
+	}
 	shutdown := func() {
 		b.workers.stop(workerStopTimeout)
 		stopEnrichers()
 		for _, e := range enrichers {
 			select { // the DB closes after Run returns
 			case <-e.done:
+			case <-time.After(workerStopTimeout):
+			}
+		}
+		if embedDone != nil {
+			select {
+			case <-embedDone:
 			case <-time.After(workerStopTimeout):
 			}
 		}
@@ -345,13 +363,19 @@ func (b *Bot) storeIncoming(m *telego.Message, text string) {
 		ReplyToUserID: replyUserID(m),
 		Date:          time.Unix(m.Date, 0),
 	})
+	known, _ := b.deps.DB.GetMember(chatID, m.From.ID)
 	_, _ = b.deps.DB.UpdateMember(chatID, m.From.ID, func(mem *store.Member) {
 		mem.FirstName = m.From.FirstName
 		mem.LastName = m.From.LastName
 		mem.Username = m.From.Username
+		mem.Premium = m.From.IsPremium
+		mem.LanguageCode = m.From.LanguageCode
 		mem.LastSeen = time.Unix(m.Date, 0)
 		mem.MsgsSinceUpdate++
+		countStyle(&mem.Style, text, replyUserID(m), time.Unix(m.Date, 0).In(tehran))
 	})
+	b.maybeSeed(m.Chat.ID, *m.From, known)
+	b.archive(chatID, m, text)
 	if rid := replyMessageID(m); rid != 0 {
 		_ = b.deps.DB.UpdateMessage(chatID, int64(rid), func(r *store.Message) { r.Replies++ })
 	}
@@ -376,6 +400,11 @@ func (b *Bot) maybeEnqueueMemory(chatID, userID int64) {
 	cfg := b.deps.Cfg.Features.Profiles
 	if !cfg.On() {
 		return
+	}
+	if cfg.SelfEvery > 0 {
+		if c, err := b.deps.DB.GetChat(chatID); err == nil && c.MsgsSinceSelfUpdate >= cfg.SelfEvery {
+			b.deps.Memory.EnqueueSelf(chatID)
+		}
 	}
 	mem, err := b.deps.DB.GetMember(chatID, userID)
 	if err != nil {

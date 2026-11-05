@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -73,6 +74,8 @@ func (b *Bot) handleCommand(ctx context.Context, m *telego.Message, text string)
 			return
 		}
 		_ = b.deps.DB.DeleteMember(chatID, from)
+		_ = b.deps.DB.DeleteMemory(chatID, from)
+		b.purgeArchive(chatID, from)
 		b.replyCommand(m, i18n.Forgotten)
 
 	case "ignoreme":
@@ -139,12 +142,12 @@ func (b *Bot) replyCommand(m *telego.Message, text string) {
 
 // handleMe renders the sender's own profile, or NothingYet.
 func (b *Bot) handleMe(m *telego.Message) {
-	mem, err := b.deps.DB.GetMember(m.Chat.ID, m.From.ID)
-	if err != nil || mem == nil {
+	mem, err := b.deps.DB.GetMemory(m.Chat.ID, m.From.ID)
+	if err != nil {
 		b.replyCommand(m, i18n.NothingYet)
 		return
 	}
-	r := memory.Render(mem.Profile)
+	r := memory.Render(mem)
 	if r == "" {
 		b.replyCommand(m, i18n.NothingYet)
 		return
@@ -158,15 +161,17 @@ func (b *Bot) handleTerms(m *telego.Message) {
 		b.replyCommand(m, i18n.FeatureOff)
 		return
 	}
-	terms, _ := b.deps.DB.Terms(m.Chat.ID)
+	mem, _ := b.deps.DB.GetMemory(m.Chat.ID, store.GroupEntity)
+	terms := mem.Kind(store.KindTerm)
 	if len(terms) == 0 {
 		b.replyCommand(m, i18n.NoTerms)
 		return
 	}
+	sort.SliceStable(terms, func(i, j int) bool { return terms[i].LastAt.After(terms[j].LastAt) })
 	var sb strings.Builder
 	sb.WriteString(i18n.TermsHeader)
 	for _, t := range terms {
-		line := fmt.Sprintf("\n• %s: %s", t.Term, t.Meaning)
+		line := fmt.Sprintf("\n• %s: %s", t.Text, t.Note)
 		if sb.Len()+len(line) > maxChunk-16 {
 			sb.WriteString("\n…")
 			break
@@ -199,13 +204,18 @@ func (b *Bot) handleStatus(m *telego.Message) {
 	if b.transcriber != nil {
 		fmt.Fprintf(&sb, "Voice queue: %d\n", len(b.transcriber.queue))
 	}
+	group, _ := b.deps.DB.GetMemory(chatID, store.GroupEntity)
+	if n, _ := b.deps.DB.CountMemories(chatID); n > 0 {
+		fmt.Fprintf(&sb, "Memories: %d\n", n)
+	}
 	if g := b.deps.Cfg.Features.GroupMemory; g.On() {
-		events, _ := b.deps.DB.GroupEvents(chatID, g.TTL)
-		fmt.Fprintf(&sb, "Group memory: %d events\n", len(events))
+		fmt.Fprintf(&sb, "Group memory: %d events\n", len(group.Kind(store.KindEvent)))
 	}
 	if g := b.deps.Cfg.Features.Glossary; g.On() {
-		terms, _ := b.deps.DB.Terms(chatID)
-		fmt.Fprintf(&sb, "Glossary: %d/%d terms\n", len(terms), g.MaxItems)
+		fmt.Fprintf(&sb, "Glossary: %d/%d terms\n", len(group.Kind(store.KindTerm)), g.MaxItems)
+	}
+	if b.embedder != nil {
+		fmt.Fprintf(&sb, "Embeddings: %s\n", b.embedder.status())
 	}
 	if b.deps.Cfg.Features.Moderation.On() {
 		chat, _ := b.deps.DB.GetChat(chatID)

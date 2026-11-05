@@ -21,6 +21,7 @@ import (
 	"github.com/ehsanranjbar/hooshang/internal/memory"
 	"github.com/ehsanranjbar/hooshang/internal/ratelimit"
 	"github.com/ehsanranjbar/hooshang/internal/store"
+	"github.com/ehsanranjbar/hooshang/internal/text"
 )
 
 const testChat = int64(-100)
@@ -95,9 +96,7 @@ func toolNames(req llm.Request) []string {
 
 func TestReplyPromptHasProfilesAndTranscript(t *testing.T) {
 	b, db, tg, fake := replyBot(t, 10, llm.Response{Content: "هوشنگ: سلام علی جان!"})
-	_, _ = db.UpdateMember(testChat, ali.ID, func(m *store.Member) {
-		m.Profile.Facts = []store.Item{{Text: "عاشق فوتبال"}}
-	})
+	addItems(db, testChat, ali.ID, store.KindFact, false, "عاشق فوتبال")
 	say(b, 1, sara, "بچه‌ها امشب بازی داریم")
 	m := say(b, 2, ali, "هوشنگ تو کدوم تیمی؟")
 
@@ -249,27 +248,26 @@ func TestPoemIsTwoBeytsWithThePoet(t *testing.T) {
 }
 
 func TestAdminEditsMemoryByTool(t *testing.T) {
-	ops := `{"member":"@ali","ops":[{"action":"replace","section":"facts","old_text":"تهران","text":"ساکن شیراز"}]}`
+	ops := `{"member":"@ali","ops":[{"action":"replace","section":"fact","old_text":"تهران","text":"ساکن شیراز"}]}`
 	b, db, tg, fake := replyBot(t, 10,
 		llm.Response{ToolCalls: []llm.ToolCall{{ID: "1", Name: "edit_memory", Arguments: ops}}},
 		llm.Response{Content: "باشه، شیراز رو جای تهران نوشتم"},
 	)
 	say(b, 1, ali, "سلام")
-	_, _ = db.UpdateMember(testChat, ali.ID, func(m *store.Member) {
-		m.Profile.Facts = []store.Item{{Text: "ساکن تهران"}}
-	})
+	addItems(db, testChat, ali.ID, store.KindFact, false, "ساکن تهران")
 	m := say(b, 2, boss, "هوشنگ، علی دیگه تهران نیست، رفته شیراز")
 	b.runReply(context.Background(), job{kind: jobReply, chatID: testChat, msg: m})
 
-	mem, _ := db.GetMember(testChat, ali.ID)
-	if len(mem.Profile.Facts) != 1 || mem.Profile.Facts[0].Text != "ساکن شیراز" || !mem.Profile.Facts[0].Locked {
-		t.Fatalf("facts = %+v", mem.Profile.Facts)
+	mem, _ := db.GetMemory(testChat, ali.ID)
+	facts := mem.Kind(store.KindFact)
+	if len(facts) != 1 || facts[0].Text != "ساکن شیراز" || !facts[0].Locked {
+		t.Fatalf("facts = %+v", facts)
 	}
-	if len(mem.Profile.Suppressed) != 1 {
-		t.Fatalf("suppressed = %v", mem.Profile.Suppressed)
+	if len(mem.Suppressed) != 1 {
+		t.Fatalf("suppressed = %v", mem.Suppressed)
 	}
 	edits, _ := db.RecentEdits(testChat, 10)
-	if len(edits) != 1 || edits[0].AdminID != ownerID || edits[0].UserID != ali.ID || edits[0].After.Facts[0].Text != "ساکن شیراز" {
+	if len(edits) != 1 || edits[0].AdminID != ownerID || edits[0].UserID != ali.ID || edits[0].After.Kind(store.KindFact)[0].Text != "ساکن شیراز" {
 		t.Fatalf("edits = %+v", edits)
 	}
 	if res := fake.Calls[1].Messages[len(fake.Calls[1].Messages)-1]; res.Role != "tool" || !strings.Contains(res.Content, "شیراز") {
@@ -309,22 +307,20 @@ func TestNonAdminCannotCallEditTool(t *testing.T) {
 	say(b, 1, sara, "سلام")
 	m := say(b, 2, ali, "هوشنگ یادت باشه سارا خروپف میکنه")
 	b.runReply(context.Background(), job{kind: jobReply, chatID: testChat, msg: m})
-	mem, _ := db.GetMember(testChat, sara.ID)
-	if len(mem.Profile.Quirks) != 0 {
-		t.Fatalf("a non-admin edited memory: %+v", mem.Profile.Quirks)
+	if q := kindTexts(db, testChat, sara.ID, store.KindQuirk); len(q) != 0 {
+		t.Fatalf("a non-admin edited memory: %+v", q)
 	}
 }
 
 func TestMemoryUpdateWiring(t *testing.T) {
-	extracted, _ := json.Marshal(map[string]any{"interests": []string{"فوتبال"}, "facts": []string{"دانشجوی پزشکی"}})
+	extracted, _ := json.Marshal(map[string]any{"items": []map[string]any{
+		{"kind": "interest", "text": "فوتبال", "msgs": []int{1}}, {"kind": "fact", "text": "دانشجوی پزشکی", "msgs": []int{2}}}})
 	b, db, _, fake := replyBot(t, 10, llm.Response{Content: string(extracted)})
 	upd := memory.NewUpdater(db, fake, "m", memory.UpdaterConfig{ContextMessages: 150, MaxItems: 10, Language: "fa"}, nil)
 	b.deps.Memory = upd
 	b.deps.Cfg.Bot.SpontaneousChance = 0
 
-	_, _ = db.UpdateMember(testChat, ali.ID, func(m *store.Member) {
-		m.Profile.Facts = []store.Item{{Text: "اهل تبریز", Locked: true}}
-	})
+	addItems(db, testChat, ali.ID, store.KindFact, true, "اهل تبریز")
 	for i := 1; i <= b.deps.Cfg.Features.Profiles.UpdateEvery; i++ {
 		b.handleMessage(context.Background(), &telego.Message{
 			MessageID: i, Chat: telego.Chat{ID: testChat, Type: "supergroup"}, From: ali,
@@ -338,7 +334,8 @@ func TestMemoryUpdateWiring(t *testing.T) {
 		t.Fatal(err)
 	}
 	mem, _ := db.GetMember(testChat, ali.ID)
-	r := memory.Render(mem.Profile)
+	m2, _ := db.GetMemory(testChat, ali.ID)
+	r := memory.Render(m2)
 	for _, want := range []string{"فوتبال", "دانشجوی پزشکی", "اهل تبریز"} {
 		if !strings.Contains(r, want) {
 			t.Errorf("profile is missing %q:\n%s", want, r)
@@ -429,10 +426,8 @@ func TestProfilesFillTheBudget(t *testing.T) {
 	b, db, _, fake := replyBot(t, 10, llm.Response{Content: "x"}, llm.Response{Content: "y"})
 	reza := &telego.User{ID: 31, FirstName: "رضا", Username: "reza"} // never wrote in the transcript
 	for _, u := range []*telego.User{ali, sara, reza} {
-		_, _ = db.UpdateMember(testChat, u.ID, func(m *store.Member) {
-			m.FirstName = u.FirstName
-			m.Profile.Quirks = []store.Item{{Text: "عادت " + u.FirstName}}
-		})
+		_, _ = db.UpdateMember(testChat, u.ID, func(m *store.Member) { m.FirstName = u.FirstName })
+		addItems(db, testChat, u.ID, store.KindQuirk, false, "عادت "+u.FirstName)
 	}
 	say(b, 1, sara, "سلام")
 	m := say(b, 2, ali, "هوشنگ امروز هوا چطوره؟")
@@ -463,10 +458,8 @@ func TestSpontaneousTargetComesFirst(t *testing.T) {
 	b, db, _, fake := replyBot(t, 10, llm.Response{Content: "x"})
 	b.deps.Cfg.Bot.RandomProfiles = 0
 	for _, u := range []*telego.User{ali, sara} {
-		_, _ = db.UpdateMember(testChat, u.ID, func(m *store.Member) {
-			m.FirstName = u.FirstName
-			m.Profile.Quirks = []store.Item{{Text: "عادت " + u.FirstName}}
-		})
+		_, _ = db.UpdateMember(testChat, u.ID, func(m *store.Member) { m.FirstName = u.FirstName })
+		addItems(db, testChat, u.ID, store.KindQuirk, false, "عادت "+u.FirstName)
 	}
 	say(b, 1, sara, "سلام")
 	b.runSpontaneous(context.Background(), job{kind: jobSpontaneous, chatID: testChat, mode: "tease", target: ali.ID, targetName: "علی"})
@@ -678,7 +671,7 @@ func firstLine(s string) string {
 }
 
 func TestAdminOrderIsSavedAndAlwaysShown(t *testing.T) {
-	ops := `{"member":"سارا","ops":[{"action":"add","section":"orders","text":"باهاش شوخی نکن"}]}`
+	ops := `{"member":"سارا","ops":[{"action":"add","section":"order","text":"باهاش شوخی نکن"}]}`
 	b, db, _, fake := replyBot(t, 10,
 		llm.Response{ToolCalls: []llm.ToolCall{{ID: "1", Name: "edit_memory", Arguments: ops}}},
 		llm.Response{Content: "چشم"},
@@ -687,9 +680,9 @@ func TestAdminOrderIsSavedAndAlwaysShown(t *testing.T) {
 	b.deps.Cfg.Bot.ProfileBudget, b.deps.Cfg.Bot.RandomProfiles = 0, 0 // orders don't depend on profiles
 	say(b, 1, sara, "سلام")
 	b.runReply(context.Background(), job{kind: jobReply, chatID: testChat, msg: say(b, 2, boss, "هوشنگ دیگه با سارا شوخی نکن، جدی میگم")})
-	mem, _ := db.GetMember(testChat, sara.ID)
-	if len(mem.Profile.Orders) != 1 || !mem.Profile.Orders[0].Locked {
-		t.Fatalf("orders = %+v", mem.Profile.Orders)
+	mem, _ := db.GetMemory(testChat, sara.ID)
+	if o := mem.Kind(store.KindOrder); len(o) != 1 || !o[0].Locked {
+		t.Fatalf("orders = %+v", o)
 	}
 	// Sara wrote in the transcript; Ali asks something unrelated.
 	b.runReply(context.Background(), job{kind: jobReply, chatID: testChat, msg: say(b, 3, ali, "هوشنگ چه خبر؟")})
@@ -700,7 +693,7 @@ func TestAdminOrderIsSavedAndAlwaysShown(t *testing.T) {
 }
 
 func TestHasName(t *testing.T) {
-	n := store.NormalizeTerm
+	n := text.Fold
 	for _, c := range []struct {
 		text, name string
 		want       bool
@@ -722,9 +715,7 @@ func TestNamedMemberProfileIsShown(t *testing.T) {
 	b, db, _, fake := replyBot(t, 10, llm.Response{Content: "x"})
 	b.deps.Cfg.Bot.ProfileBudget, b.deps.Cfg.Bot.RandomProfiles = 0, 0
 	say(b, 1, sara, "سلام")
-	_, _ = db.UpdateMember(testChat, sara.ID, func(m *store.Member) {
-		m.Profile.Facts = []store.Item{{Text: "مهندس نرم‌افزار است"}}
-	})
+	addItems(db, testChat, sara.ID, store.KindFact, false, "مهندس نرم‌افزار است")
 	b.runReply(context.Background(), job{kind: jobReply, chatID: testChat, msg: say(b, 2, ali, "هوشنگ سارا کیه؟")})
 	if p := fake.Calls[0].Messages[1].Content; !strings.Contains(p, "مهندس نرم‌افزار") {
 		t.Errorf("Sara's profile is missing:\n%s", p)

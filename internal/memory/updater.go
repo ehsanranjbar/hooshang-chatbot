@@ -18,22 +18,23 @@ import (
 // UpdaterConfig holds the updater's settings.
 type UpdaterConfig struct {
 	ContextMessages int
-	MaxItems        int
+	MaxItems        int // per kind
 	Language        string
 	MaxTokens       int // for the LLM call; 0 → 2048
-	// JSONSchema sends response_format json_schema. Off by default: on Gemma 4
-	// and Qwen 3.8 in LM Studio the constrained output degenerates (docs/MODELS.md);
-	// the prompt spells out the JSON shape and parseExtracted validates it.
-	JSONSchema bool
-	Group      GroupConfig
+	JSONSchema      bool
+	BotID           int64 // the bot's user id: the self entity
+	Group           GroupConfig
+	// Embed, when set, is told about new or changed items so they can be
+	// embedded for retrieval (RAG). It must not block.
+	Embed func(chatID, entity int64, items []store.Item)
 }
 
-// job is one queued profile update.
+// job is one queued update: a member (userID), the group (0) or the bot (BotID).
 type job struct {
 	chatID, userID int64
 }
 
-// Updater re-extracts member profiles from recent messages.
+// Updater re-extracts memories from recent messages.
 type Updater struct {
 	db     *store.DB
 	c      llm.Client
@@ -51,15 +52,7 @@ func NewUpdater(db *store.DB, c llm.Client, model string, cfg UpdaterConfig, log
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Updater{
-		db:      db,
-		c:       c,
-		model:   model,
-		cfg:     cfg,
-		logger:  logger,
-		queue:   make(chan job, 64),
-		pending: make(map[job]bool),
-	}
+	return &Updater{db: db, c: c, model: model, cfg: cfg, logger: logger, queue: make(chan job, 64), pending: make(map[job]bool)}
 }
 
 // QueueLen reports how many jobs are waiting.
@@ -83,6 +76,13 @@ func (u *Updater) Enqueue(chatID, userID int64) {
 	u.mu.Unlock()
 }
 
+// EnqueueSelf queues an update of the bot's own memory in the chat.
+func (u *Updater) EnqueueSelf(chatID int64) {
+	if u.cfg.BotID != 0 {
+		u.Enqueue(chatID, u.cfg.BotID)
+	}
+}
+
 // Run runs the single worker until ctx is done.
 func (u *Updater) Run(ctx context.Context) {
 	for {
@@ -94,9 +94,12 @@ func (u *Updater) Run(ctx context.Context) {
 			delete(u.pending, j)
 			u.mu.Unlock()
 			var err error
-			if j.userID == 0 {
+			switch {
+			case j.userID == store.GroupEntity:
 				err = u.UpdateGroupNow(ctx, j.chatID)
-			} else {
+			case j.userID == u.cfg.BotID:
+				err = u.UpdateSelfNow(ctx, j.chatID)
+			default:
 				err = u.UpdateNow(ctx, j.chatID, j.userID)
 			}
 			if err != nil {
@@ -106,117 +109,81 @@ func (u *Updater) Run(ctx context.Context) {
 	}
 }
 
-// ProfileJSON is the shape of a profile with sections as plain string lists,
-// without the locked flags. It is used in the extract prompt and is the
-// expected shape of the model's JSON output.
-type ProfileJSON struct {
-	Nickname      string   `json:"nickname"`
-	Summary       string   `json:"summary"`
-	Facts         []string `json:"facts"`
-	Interests     []string `json:"interests"`
-	Quirks        []string `json:"quirks"`
-	Relationships []string `json:"relationships"`
-	Boundaries    []string `json:"boundaries"`
+// extractedJSON is the shape the extractors return.
+type extractedJSON struct {
+	Nickname string `json:"nickname"`
+	Summary  string `json:"summary"`
+	Items    *[]struct {
+		Kind string  `json:"kind"`
+		Text string  `json:"text"`
+		Msgs []int64 `json:"msgs"`
+	} `json:"items"`
 }
 
-// ToProfileJSON strips the locked flags from a stored profile.
-func ToProfileJSON(p store.Profile) ProfileJSON {
-	ls := func(items []store.Item) []string {
-		out := make([]string, 0, len(items))
-		for _, it := range items {
-			if t := strings.TrimSpace(it.Text); t != "" {
-				out = append(out, t)
-			}
-		}
-		return out
-	}
-	return ProfileJSON{
-		Nickname:      p.Nickname,
-		Summary:       p.Summary,
-		Facts:         ls(p.Facts),
-		Interests:     ls(p.Interests),
-		Quirks:        ls(p.Quirks),
-		Relationships: ls(p.Relationships),
-		Boundaries:    ls(p.Boundaries),
-	}
-}
-
-// String renders the profile JSON compactly for prompts.
-func (p ProfileJSON) String() string {
-	s, err := json.Marshal(p)
-	if err != nil {
-		return "{}"
-	}
-	return string(s)
-}
-
-// FromProfileJSON fills a stored profile from the extracted JSON.
-func FromProfileJSON(pj ProfileJSON) store.Profile {
-	items := func(ss []string) []store.Item {
-		out := make([]store.Item, 0, len(ss))
-		for _, s := range ss {
-			if t := strings.TrimSpace(s); t != "" {
-				out = append(out, store.Item{Text: t})
-			}
-		}
-		return out
-	}
-	return store.Profile{
-		Nickname:      strings.TrimSpace(pj.Nickname),
-		Summary:       strings.TrimSpace(pj.Summary),
-		Facts:         items(pj.Facts),
-		Interests:     items(pj.Interests),
-		Quirks:        items(pj.Quirks),
-		Relationships: items(pj.Relationships),
-		Boundaries:    items(pj.Boundaries),
-	}
-}
-
-// profileSchema is the response_format schema for the extract call.
-// NOTE: the non-strict schema is only a hint; the prompt also spells out the
-// exact shape with an example, and parseExtracted validates the result.
-var profileSchema = json.RawMessage(`{
+// extractSchema is the response_format schema for the extract calls (a hint:
+// the prompt spells the shape out and parseExtracted validates).
+var extractSchema = json.RawMessage(`{
   "type": "object",
   "properties": {
     "nickname": {"type": "string"},
     "summary": {"type": "string"},
-    "facts": {"type": "array", "items": {"type": "string"}},
-    "interests": {"type": "array", "items": {"type": "string"}},
-    "quirks": {"type": "array", "items": {"type": "string"}},
-    "relationships": {"type": "array", "items": {"type": "string"}},
-    "boundaries": {"type": "array", "items": {"type": "string"}}
-  }
+    "items": {"type": "array", "items": {"type": "object", "properties": {
+      "kind": {"type": "string"}, "text": {"type": "string"}, "msgs": {"type": "array", "items": {"type": "integer"}}},
+      "required": ["kind", "text"]}}
+  },
+  "required": ["items"]
 }`)
 
-// parseExtracted validates the model's JSON: unknown keys are ignored,
-// missing sections are treated as empty. It fails if the top level is not an
-// object or none of the known keys is present.
-func parseExtracted(raw []byte) (ProfileJSON, error) {
-	var probe map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &probe); err != nil {
-		return ProfileJSON{}, fmt.Errorf("not a JSON object: %w", err)
+// parseExtracted validates the model's JSON: it must be an object with an
+// "items" array. Unknown keys are ignored.
+func parseExtracted(raw []byte) (Extracted, error) {
+	var x extractedJSON
+	if err := json.Unmarshal(raw, &x); err != nil {
+		return Extracted{}, fmt.Errorf("not the expected JSON: %w", err)
 	}
-	known := []string{"nickname", "summary", "facts", "interests", "quirks", "relationships", "boundaries"}
-	any := false
-	for _, k := range known {
-		if _, ok := probe[k]; ok {
-			any = true
-			break
-		}
+	if x.Items == nil {
+		return Extracted{}, fmt.Errorf(`no "items" key in %q`, strings.TrimSpace(string(raw)))
 	}
-	if !any {
-		return ProfileJSON{}, fmt.Errorf("no known profile key in %q", strings.TrimSpace(string(raw)))
+	out := Extracted{Nickname: strings.TrimSpace(x.Nickname), Summary: strings.TrimSpace(x.Summary)}
+	for _, it := range *x.Items {
+		out.Items = append(out.Items, ExtractedItem{Kind: strings.ToLower(strings.TrimSpace(it.Kind)), Text: strings.TrimSpace(it.Text), Msgs: it.Msgs})
 	}
-	var pj ProfileJSON
-	if err := json.Unmarshal(raw, &pj); err != nil {
-		return ProfileJSON{}, err
-	}
-	return pj, nil
+	return out, nil
 }
 
-// UpdateNow runs one profile update for a member. It reads the member and
-// recent messages, calls the LLM, and stores the merged profile. On a parse
-// failure the old profile is kept and the counter is reset; it returns nil.
+// CurrentItems renders a memory's items for an extract prompt, one "kind: text"
+// per line, so the model knows what is already known.
+func CurrentItems(m store.Memory, kinds []string) string {
+	var lines []string
+	for _, kind := range kinds {
+		for _, it := range m.Kind(kind) {
+			lines = append(lines, kind+": "+it.Text)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// extract runs one extraction call and parses it.
+func (u *Updater) extract(ctx context.Context, prompt string) (Extracted, error) {
+	maxTokens := max(u.cfg.MaxTokens, 2048)
+	req := llm.Request{Model: u.model, Messages: []llm.Message{{Role: "user", Content: prompt}}, Temperature: 0.2, MaxTokens: maxTokens}
+	if u.cfg.JSONSchema {
+		req.Schema, req.SchemaName = extractSchema, "memory"
+	}
+	resp, err := u.c.Chat(ctx, req)
+	if err != nil {
+		return Extracted{}, fmt.Errorf("llm: %w", err)
+	}
+	raw, err := llm.ExtractJSON(resp.Content)
+	if err != nil {
+		return Extracted{}, fmt.Errorf("parse: %w", err)
+	}
+	return parseExtracted(raw)
+}
+
+// UpdateNow runs one memory update for a member: it reads recent messages,
+// calls the model, and merges the result into the member's memory. A failed
+// call or an invalid answer keeps the old memory; it returns nil for those.
 func (u *Updater) UpdateNow(ctx context.Context, chatID, userID int64) error {
 	m, err := u.db.GetMember(chatID, userID)
 	if err != nil {
@@ -225,22 +192,15 @@ func (u *Updater) UpdateNow(ctx context.Context, chatID, userID int64) error {
 		}
 		return err
 	}
+	reset := func() error {
+		_, err := u.db.UpdateMember(chatID, userID, func(m *store.Member) { m.MsgsSinceUpdate = 0 })
+		return err
+	}
 	msgs, err := u.db.RecentMessages(chatID, u.cfg.ContextMessages)
 	if err != nil {
 		return err
 	}
 	n := 0
-	for _, msg := range msgs {
-		if msg.UserID == userID && !msg.FromBot {
-			n++
-		}
-	}
-	if n < 3 {
-		// Not enough material yet; just reset the counter.
-		_, err := u.db.UpdateMember(chatID, userID, func(m *store.Member) { m.MsgsSinceUpdate = 0 })
-		return err
-	}
-
 	var lines []string
 	for _, msg := range msgs {
 		if msg.FromBot {
@@ -249,59 +209,100 @@ func (u *Updater) UpdateNow(ctx context.Context, chatID, userID int64) error {
 		marker := "  "
 		if msg.UserID == userID {
 			marker = ">>"
+			n++
 		}
-		lines = append(lines, fmt.Sprintf("%s %s: %s", marker, msg.Name, msg.Text))
+		lines = append(lines, fmt.Sprintf("%s [%d] %s: %s", marker, msg.ID, msg.Name, msg.Text))
+	}
+	if n < 3 {
+		return reset() // not enough material yet
+	}
+	cur, err := u.db.GetMemory(chatID, userID)
+	if err != nil {
+		return err
 	}
 	prompt, err := prompts.MemoryExtract(prompts.ExtractData{
-		Language:   u.cfg.Language,
-		TargetName: m.FirstName,
-		Profile:    ToProfileJSON(m.Profile).String(),
+		Language: u.cfg.Language, TargetName: m.FirstName, Nickname: cur.Nickname, Summary: cur.Summary,
+		Items: CurrentItems(cur, MemberKinds), Kinds: strings.Join(MemberKinds, ", "), Transcript: strings.Join(lines, "\n"),
+	})
+	if err != nil {
+		return err
+	}
+	ext, err := u.extract(ctx, prompt)
+	if err != nil {
+		u.logger.Warn("memory: extraction failed, keeping the old memory", "chat", chatID, "user", userID, "err", err)
+		return reset()
+	}
+	// Merge inside the transaction against the *current* stored memory so
+	// concurrent admin edits (locked items, suppressed texts) are kept.
+	mem, err := u.db.UpdateMemory(chatID, userID, func(mm *store.Memory) { Merge(mm, ext, MemberKinds, time.Now(), u.cfg.MaxItems) })
+	if err != nil {
+		return err
+	}
+	u.embed(chatID, userID, mem)
+	_, err = u.db.UpdateMember(chatID, userID, func(m *store.Member) {
+		m.ProfileUpdatedAt = time.Now()
+		m.MsgsSinceUpdate = 0
+	})
+	return err
+}
+
+// UpdateSelfNow updates what the bot remembers about itself in the chat: the
+// stances it took, the running jokes it made and the promises it gave, from
+// its own recent messages and the messages they answered.
+func (u *Updater) UpdateSelfNow(ctx context.Context, chatID int64) error {
+	done := func() error {
+		return u.db.UpdateChat(chatID, func(c *store.Chat) { c.MsgsSinceSelfUpdate = 0 })
+	}
+	msgs, err := u.db.RecentMessages(chatID, u.cfg.ContextMessages)
+	if err != nil {
+		return err
+	}
+	byID := map[int64]store.Message{}
+	for _, m := range msgs {
+		byID[m.ID] = m
+	}
+	var lines []string
+	n := 0
+	for _, m := range msgs {
+		if !m.FromBot || strings.HasPrefix(m.Text, "[") {
+			continue
+		}
+		n++
+		if r, ok := byID[m.ReplyToID]; ok && m.ReplyToID != 0 {
+			lines = append(lines, fmt.Sprintf("   [%d] %s: %s", r.ID, r.Name, r.Text))
+		}
+		lines = append(lines, fmt.Sprintf(">> [%d] you: %s", m.ID, m.Text))
+	}
+	if n < 5 {
+		return done()
+	}
+	cur, err := u.db.GetMemory(chatID, u.cfg.BotID)
+	if err != nil {
+		return err
+	}
+	prompt, err := prompts.SelfExtract(prompts.ExtractData{
+		Language: u.cfg.Language, Items: CurrentItems(cur, SelfKinds), Kinds: strings.Join(SelfKinds, ", "),
 		Transcript: strings.Join(lines, "\n"),
 	})
 	if err != nil {
 		return err
 	}
-
-	maxTokens := u.cfg.MaxTokens
-	if maxTokens < 2048 {
-		maxTokens = 2048
-	}
-	req := llm.Request{
-		Model:       u.model,
-		Messages:    []llm.Message{{Role: "user", Content: prompt}},
-		Temperature: 0.2,
-		MaxTokens:   maxTokens,
-	}
-	if u.cfg.JSONSchema {
-		req.Schema, req.SchemaName = profileSchema, "profile"
-	}
-	resp, err := u.c.Chat(ctx, req)
+	ext, err := u.extract(ctx, prompt)
 	if err != nil {
-		u.logger.Warn("memory: llm call failed, resetting counter", "chat", chatID, "user", userID, "err", err)
-		_, err := u.db.UpdateMember(chatID, userID, func(m *store.Member) { m.MsgsSinceUpdate = 0 })
+		u.logger.Warn("self memory: extraction failed", "chat", chatID, "err", err)
+		return done()
+	}
+	mem, err := u.db.UpdateMemory(chatID, u.cfg.BotID, func(mm *store.Memory) { Merge(mm, ext, SelfKinds, time.Now(), u.cfg.MaxItems) })
+	if err != nil {
 		return err
 	}
+	u.embed(chatID, u.cfg.BotID, mem)
+	return done()
+}
 
-	raw, err := llm.ExtractJSON(resp.Content)
-	if err != nil {
-		u.logger.Warn("memory: extract parse failed, keeping old profile", "chat", chatID, "user", userID, "err", err)
-		_, err := u.db.UpdateMember(chatID, userID, func(m *store.Member) { m.MsgsSinceUpdate = 0 })
-		return err
+// embed hands the memory's items to the embedder, if any.
+func (u *Updater) embed(chatID, entity int64, m store.Memory) {
+	if u.cfg.Embed != nil {
+		u.cfg.Embed(chatID, entity, m.Items)
 	}
-	pj, err := parseExtracted(raw)
-	if err != nil {
-		u.logger.Warn("memory: extract invalid, keeping old profile", "chat", chatID, "user", userID, "err", err)
-		_, err := u.db.UpdateMember(chatID, userID, func(m *store.Member) { m.MsgsSinceUpdate = 0 })
-		return err
-	}
-	extracted := FromProfileJSON(pj)
-
-	// Merge inside the transaction against the *current* stored profile so
-	// concurrent Locked items and Suppressed are kept (KVUTIL.md rule).
-	_, err = u.db.UpdateMember(chatID, userID, func(m *store.Member) {
-		m.Profile = Merge(m.Profile, extracted, u.cfg.MaxItems)
-		m.ProfileUpdatedAt = time.Now()
-		m.MsgsSinceUpdate = 0
-	})
-	return err
 }

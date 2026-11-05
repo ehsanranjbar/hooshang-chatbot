@@ -228,3 +228,10 @@ go test -tags lmstudio -run TestLiveBench -timeout 2h -v ./internal/bot
 
 `BENCH_ONLY=faal_tool,admin_edit` runs a subset. Stop other heavy work on the machine first, or
 the latencies won't be comparable. The scenarios are in `internal/bot/lmstudio_test.go`.
+
+## Embeddings (2026-11-05)
+
+`text-embedding-bge-m3` in LM Studio next to the 31B: 1024 dimensions, three Persian texts in
+0.4 s. Cosine between «ماشینمو فروختم، پراید سفید بود» and «یادته ماشینتو فروختی؟ همون پراید» is
+0.79; between the first and «امروز هوا خیلی خوبه بریم بیرون» 0.47. bge-m3 scores run high, so
+`features.rag.min_score` defaults to 0.55.

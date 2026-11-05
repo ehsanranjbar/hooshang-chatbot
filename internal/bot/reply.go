@@ -19,6 +19,7 @@ import (
 	"github.com/ehsanranjbar/hooshang/internal/memory"
 	"github.com/ehsanranjbar/hooshang/internal/prompts"
 	"github.com/ehsanranjbar/hooshang/internal/store"
+	"github.com/ehsanranjbar/hooshang/internal/text"
 )
 
 // runReply runs a reply job (§3.9 reply.go step 1–7).
@@ -36,7 +37,7 @@ func (b *Bot) runReply(ctx context.Context, j job) {
 	// 2–5. The prompt and the tools.
 	answered := false
 	j.answered = &answered
-	req, handlers := b.replyRequest(j)
+	req, handlers := b.replyRequest(ctx, &j)
 	if imgs, id, ok := b.questionImage(ctx, j.msg, pre); ok {
 		req.Messages[1].Images = imgs
 		req.Messages[1].Content += "\n\n" + imageNote(id, len(imgs))
@@ -84,29 +85,25 @@ func (b *Bot) runReply(ctx context.Context, j job) {
 
 // replyRequest builds the LLM request of a reply job: the system prompt (plus
 // the admin rules for the admin), the task with the profiles, group memory,
-// glossary and transcript, and the tools the author may use.
-func (b *Bot) replyRequest(j job) (llm.Request, map[string]llm.ToolFunc) {
-	msgs := b.transcriptMessages(j)
-	transcript := b.formatTranscript(j, msgs)
+// glossary, related older messages and transcript, and the tools the author
+// may use. When the estimate is over the model's context, the optional parts
+// go first: related messages, then random profiles and group memory, then the
+// oldest transcript lines.
+func (b *Bot) replyRequest(ctx context.Context, j *job) (llm.Request, map[string]llm.ToolFunc) {
 	sys := b.systemPrompt(j.chatID)
 	if j.authorID() > 0 && b.deps.Admins.IsAdmin(j.chatID, j.authorID()) {
-		// The edit_memory rules only with profiles, the moderate rules only with moderation.
 		sys += prompts.AdminRules(b.deps.Cfg.Features.Profiles.On(), b.deps.Cfg.Features.Moderation.On())
 	}
-	profiles := b.renderProfiles(j, msgs)
-	userMsg, _ := prompts.ReplyTask(prompts.TaskData{
-		Language:   b.deps.Cfg.Bot.Language,
-		Orders:     b.renderOrders(j, msgs),
-		Profiles:   profiles,
-		Group:      b.renderGroupMemory(j.chatID, j),
-		Glossary:   b.renderGlossary(j.chatID, transcript),
-		Transcript: transcript,
-		Task:       b.taskFor(j),
-		Variety:    b.varietyNote(j.chatID),
-		Bubbles:    b.deps.Cfg.Bot.Human.Bubbles,
-		Mentions:   profiles != "",
-	})
-	tools, handlers := b.toolsFor(j)
+	tools, handlers := b.toolsFor(*j)
+	limit := b.deps.Cfg.LLM.ContextTokens - b.deps.Cfg.LLM.MaxTokens - toolTokens(tools)
+	var userMsg string
+	for level := 0; level <= 3; level++ {
+		userMsg = b.replyTask(ctx, j, level)
+		if prompts.EstimateTokens(sys)+prompts.EstimateTokens(userMsg) <= limit {
+			break
+		}
+		b.logger.Debug("prompt over the context budget: trimming", "chat", j.chatID, "level", level+1)
+	}
 	return llm.Request{
 		Model:       b.deps.Cfg.LLM.Model,
 		Messages:    []llm.Message{{Role: "system", Content: sys}, {Role: "user", Content: userMsg}},
@@ -114,6 +111,73 @@ func (b *Bot) replyRequest(j job) (llm.Request, map[string]llm.ToolFunc) {
 		MaxTokens:   b.deps.Cfg.LLM.MaxTokens,
 		Tools:       tools,
 	}, handlers
+}
+
+// toolTokens is a rough token cost of the tool schemas.
+func toolTokens(tools []llm.Tool) int {
+	n := 0
+	for _, t := range tools {
+		n += prompts.EstimateTokens(t.Description) + prompts.EstimateTokens(string(t.Parameters)) + 10
+	}
+	return n
+}
+
+// replyTask renders the user message of a reply at a trim level: 0 = all,
+// 1 = no related messages, 2 = no random profiles and no group memory,
+// 3 = the transcript cut to its last third (the trigger and the replied-to
+// message always stay).
+func (b *Bot) replyTask(ctx context.Context, j *job, level int) string {
+	msgs := b.transcriptMessages(*j)
+	if level >= 3 && len(msgs) > 5 {
+		msgs = b.trimTranscript(*j, msgs, len(msgs)/3)
+	}
+	transcript := b.formatTranscript(*j, msgs)
+	related := ""
+	if level < 1 {
+		related = b.relatedMessages(ctx, j, msgs)
+	} else {
+		b.queryVector(ctx, j, msgs) // still needed to pick profile items
+	}
+	random := b.deps.Cfg.Bot.RandomProfiles
+	if level >= 2 {
+		random = 0
+	}
+	profiles := b.renderProfilesN(*j, msgs, random)
+	group := ""
+	if level < 2 {
+		group = b.renderGroupMemory(j.chatID, *j)
+	}
+	userMsg, _ := prompts.ReplyTask(prompts.TaskData{
+		Language:   b.deps.Cfg.Bot.Language,
+		Orders:     b.renderOrders(*j, msgs),
+		Profiles:   profiles,
+		Group:      group,
+		Glossary:   b.renderGlossary(j.chatID, transcript),
+		Self:       b.renderSelf(j.chatID),
+		Related:    related,
+		Transcript: transcript,
+		Task:       b.taskFor(*j),
+		Variety:    b.varietyNote(j.chatID),
+		Bubbles:    b.deps.Cfg.Bot.Human.Bubbles,
+		Mentions:   profiles != "",
+	})
+	return userMsg
+}
+
+// trimTranscript keeps the last keep messages plus the trigger and the
+// replied-to message wherever they are.
+func (b *Bot) trimTranscript(j job, msgs []store.Message, keep int) []store.Message {
+	trigger, replyTo := int64(0), int64(0)
+	if j.msg != nil {
+		trigger, replyTo = int64(j.msg.MessageID), int64(replyMessageID(j.msg))
+	}
+	var out []store.Message
+	for i, m := range msgs {
+		if i >= len(msgs)-keep || m.ID == trigger || m.ID == replyTo {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // runSpontaneous runs a spontaneous job.
@@ -141,6 +205,7 @@ func (b *Bot) runSpontaneous(ctx context.Context, j job) {
 		Profiles:   profiles,
 		Group:      b.renderGroupMemory(j.chatID, j),
 		Glossary:   b.renderGlossary(j.chatID, transcript),
+		Self:       b.renderSelf(j.chatID),
 		Transcript: transcript,
 		Mode:       j.mode,
 		Target:     j.targetName,
@@ -319,6 +384,11 @@ func (b *Bot) formatTranscript(j job, kept []store.Message) string {
 //   - the members who wrote in the transcript, latest first;
 //   - up to bot.random_profiles random other members.
 func (b *Bot) renderProfiles(j job, msgs []store.Message) string {
+	return b.renderProfilesN(j, msgs, b.deps.Cfg.Bot.RandomProfiles)
+}
+
+// renderProfilesN is renderProfiles with the number of random profiles given.
+func (b *Bot) renderProfilesN(j job, msgs []store.Message, random int) string {
 	if !b.deps.Cfg.Features.Profiles.On() {
 		return ""
 	}
@@ -342,17 +412,27 @@ func (b *Bot) renderProfiles(j job, msgs []store.Message) string {
 			add(&more, msgs[i].UserID)
 		}
 	}
-	if n := b.deps.Cfg.Bot.RandomProfiles; n > 0 {
-		if members, err := b.deps.DB.Members(j.chatID); err == nil {
-			rand.Shuffle(len(members), func(a, c int) { members[a], members[c] = members[c], members[a] })
-			for _, m := range members {
-				if n == 0 {
-					break
-				}
-				if !seen[m.UserID()] && !m.Ignored && memory.Render(m.Profile) != "" {
-					add(&more, m.UserID())
-					n--
-				}
+	memories, err := b.deps.DB.MemoriesOf(j.chatID)
+	if err != nil {
+		return ""
+	}
+	members, _ := b.deps.DB.Members(j.chatID)
+	byID := map[int64]*store.Member{}
+	names := map[int64]string{}
+	for _, m := range members {
+		byID[m.UserID()] = m
+		names[m.UserID()] = m.FirstName
+	}
+	if n := random; n > 0 {
+		shuffled := append([]*store.Member(nil), members...)
+		rand.Shuffle(len(shuffled), func(a, c int) { shuffled[a], shuffled[c] = shuffled[c], shuffled[a] })
+		for _, m := range shuffled {
+			if n == 0 {
+				break
+			}
+			if mem, ok := memories[m.UserID()]; ok && !seen[m.UserID()] && !m.Ignored && !mem.Empty() {
+				add(&more, m.UserID())
+				n--
 			}
 		}
 	}
@@ -361,11 +441,11 @@ func (b *Bot) renderProfiles(j job, msgs []store.Message) string {
 	var parts []string
 	used := 0
 	for i, id := range append(must, more...) {
-		mem, err := b.deps.DB.GetMember(j.chatID, id)
-		if err != nil || mem == nil || mem.Ignored {
+		mem, ok := byID[id]
+		if !ok || mem.Ignored {
 			continue
 		}
-		r := memory.Render(mem.Profile)
+		r := b.renderMemberMemory(j, memories[id], mem, names)
 		if r == "" {
 			continue
 		}
@@ -377,6 +457,37 @@ func (b *Bot) renderProfiles(j job, msgs []store.Message) string {
 		parts = append(parts, part)
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+// renderMemberMemory renders one member's memory plus their style line. When
+// the memory is bigger than its share of the budget and the retrieval index
+// is on, only the items relevant to the message are rendered.
+func (b *Bot) renderMemberMemory(j job, mem store.Memory, m *store.Member, names map[int64]string) string {
+	r := memory.Render(mem)
+	if share := b.deps.Cfg.Bot.ProfileBudget / 3; share > 0 && len([]rune(r)) > share {
+		if items, ok := b.selectItems(j, m.UserID(), mem, share); ok {
+			r = memory.RenderItems(mem, items, time.Now())
+		}
+	}
+	if style := memory.RenderStyle(m.Style, names); style != "" {
+		if r != "" {
+			r += "\n"
+		}
+		r += memory.Title("style") + ": " + style
+	}
+	return r
+}
+
+// renderSelf renders what the bot has said in the chat before.
+func (b *Bot) renderSelf(chatID int64) string {
+	if !b.deps.Cfg.Features.Profiles.On() || b.deps.Cfg.Features.Profiles.SelfEvery <= 0 {
+		return ""
+	}
+	mem, err := b.deps.DB.GetMemory(chatID, b.botID)
+	if err != nil {
+		return ""
+	}
+	return memory.RenderSelf(mem, time.Now())
 }
 
 // handleOf is how a member is addressed in a mention: "@username · id N", or
@@ -416,19 +527,20 @@ func (b *Bot) aboutIDsAll(j job) []int64 {
 
 // namedIDs returns the members whose first name, nickname or username is
 // written in the text as a word («سارا کیه؟», «به علی بگو»).
-func (b *Bot) namedIDs(chatID int64, text string) []int64 {
+func (b *Bot) namedIDs(chatID int64, textT string) []int64 {
 	members, err := b.deps.DB.Members(chatID)
 	if err != nil {
 		return nil
 	}
-	norm := store.NormalizeTerm(text)
+	nicknames := b.nicknames(chatID)
+	norm := text.Fold(textT)
 	var ids []int64
 	for _, m := range members {
 		if m.UserID() == b.botID || m.Ignored {
 			continue
 		}
-		for _, name := range []string{m.FirstName, m.Profile.Nickname, m.Username} {
-			if hasName(norm, store.NormalizeTerm(name)) {
+		for _, name := range []string{m.FirstName, nicknames[m.UserID()], m.Username} {
+			if hasName(norm, text.Fold(name)) {
 				ids = append(ids, m.UserID())
 				break
 			}
@@ -495,17 +607,36 @@ func (b *Bot) renderOrders(j job, msgs []store.Message) string {
 			add(m.UserID)
 		}
 	}
+	memories, err := b.deps.DB.MemoriesOf(j.chatID)
+	if err != nil {
+		return ""
+	}
 	var lines []string
 	for _, id := range ids {
 		mem, err := b.deps.DB.GetMember(j.chatID, id)
 		if err != nil || mem == nil || mem.Ignored {
 			continue
 		}
-		if o := memory.RenderOrders(mem.Profile); o != "" {
+		if o := memory.RenderOrders(memories[id]); o != "" {
 			lines = append(lines, "- "+displayName(mem)+": "+o)
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// nicknames maps member ids to their remembered nickname.
+func (b *Bot) nicknames(chatID int64) map[int64]string {
+	out := map[int64]string{}
+	memories, err := b.deps.DB.MemoriesOf(chatID)
+	if err != nil {
+		return out
+	}
+	for id, m := range memories {
+		if m.Nickname != "" {
+			out[id] = m.Nickname
+		}
+	}
+	return out
 }
 
 // mockSweet are the marks of the mock-sweet style («ای جانم، فدای … بشم»).
@@ -579,9 +710,9 @@ func asksAboutGroup(j job) bool {
 	if j.msg == nil {
 		return false
 	}
-	text := store.NormalizeTerm(j.msg.Text + " " + j.msg.Caption)
+	folded := text.Fold(j.msg.Text + " " + j.msg.Caption)
 	for _, w := range groupWords {
-		if strings.Contains(text, store.NormalizeTerm(w)) {
+		if strings.Contains(folded, text.Fold(w)) {
 			return true
 		}
 	}
@@ -595,11 +726,11 @@ func (b *Bot) renderGroupMemory(chatID int64, j job) string {
 	if !g.On() || g.InPrompt == 0 || (!asksAboutGroup(j) && b.roll() >= g.PromptChance) {
 		return ""
 	}
-	events, err := b.deps.DB.GroupEvents(chatID, g.TTL)
+	mem, err := b.deps.DB.GetMemory(chatID, store.GroupEntity)
 	if err != nil {
 		return ""
 	}
-	return memory.RenderGroup(events, g.InPrompt, time.Now())
+	return memory.RenderEvents(mem, g.InPrompt, time.Now())
 }
 
 // renderGlossary renders the group's terms that come up in the transcript (at
@@ -610,28 +741,39 @@ func (b *Bot) renderGlossary(chatID int64, transcript string) string {
 	if !g.On() {
 		return ""
 	}
-	terms, err := b.deps.DB.Terms(chatID)
+	mem, err := b.deps.DB.GetMemory(chatID, store.GroupEntity)
+	terms := mem.Kind(store.KindTerm)
 	if err != nil || len(terms) == 0 {
 		return ""
 	}
-	text := store.NormalizeTerm(transcript)
-	var hits []store.Term
+	folded := text.Fold(transcript)
+	var hits []store.Item
 	for _, t := range terms {
-		if termMatches(text, t.Norm) {
+		if termMatches(folded, text.Fold(t.Text)) {
 			hits = append(hits, t)
 		}
 	}
-	sort.SliceStable(hits, func(i, k int) bool { return len(hits[i].Norm) > len(hits[k].Norm) })
+	hits = append(hits, b.relatedTerms(chatID, transcript, hits, g.InPrompt)...)
+	sort.SliceStable(hits, func(i, k int) bool { return len(hits[i].Text) > len(hits[k].Text) })
 	if len(hits) > g.InPrompt {
 		hits = hits[:g.InPrompt]
 	}
 	var sb strings.Builder
-	norms := make([]string, 0, len(hits))
+	var ids []uint64
 	for _, t := range hits {
-		fmt.Fprintf(&sb, "- «%s»: %s\n", t.Term, t.Meaning)
-		norms = append(norms, t.Norm)
+		fmt.Fprintf(&sb, "- «%s»: %s\n", t.Text, t.Note)
+		ids = append(ids, t.ID)
 	}
-	_ = b.deps.DB.TouchTerms(chatID, norms)
+	if len(ids) > 0 { // used terms stay; the least recently used is the one evicted
+		now := time.Now()
+		_, _ = b.deps.DB.UpdateMemory(chatID, store.GroupEntity, func(m *store.Memory) {
+			for _, id := range ids {
+				if it := m.Find(id); it != nil {
+					it.LastAt = now
+				}
+			}
+		})
+	}
 	return strings.TrimSpace(sb.String())
 }
 

@@ -4,10 +4,11 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ehsanranjbar/hooshang/internal/config"
 	"github.com/ehsanranjbar/hooshang/internal/llm"
-	"github.com/ehsanranjbar/hooshang/internal/store"
+	"github.com/ehsanranjbar/hooshang/internal/text"
 )
 
 func enableGlossary(b *Bot) {
@@ -22,9 +23,9 @@ func TestLearnTermByAnyone(t *testing.T) {
 	enableGlossary(b)
 	m := say(b, 1, sara, `هوشنگ، "چاییدن" یعنی سرما خوردن`)
 	b.runReply(context.Background(), job{kind: jobReply, chatID: testChat, msg: m})
-	got, err := db.GetTerm(testChat, "چاییدن")
-	if err != nil || got.Meaning != "سرما خوردن" || got.ByID != sara.ID {
-		t.Fatalf("term = %+v, %v", got, err)
+	got := termOf(db, testChat, "چاییدن")
+	if got == nil || got.Note != "سرما خوردن" || got.By != sara.ID {
+		t.Fatalf("term = %+v", got)
 	}
 	if len(tg.sent) != 1 {
 		t.Fatalf("sent %d messages", len(tg.sent))
@@ -34,7 +35,8 @@ func TestLearnTermByAnyone(t *testing.T) {
 func TestForgetTermPermission(t *testing.T) {
 	b, db, _, _ := replyBot(t, 10)
 	enableGlossary(b)
-	_, _ = db.PutTerm(testChat, store.Term{Term: "قلقلی", Meaning: "آدم حساس", ByID: sara.ID, ByName: "سارا"}, 100)
+	say(b, 1, sara, "سلام")
+	addTerm(db, testChat, "قلقلی", "آدم حساس", sara.ID)
 
 	forget := b.toolForgetTerm(job{chatID: testChat, msg: say(b, 2, ali, "قلقلی رو یادت بره")})
 	if out, _ := forget(context.Background(), `{"term":"قلقلی"}`); !strings.Contains(out, "error") {
@@ -44,7 +46,7 @@ func TestForgetTermPermission(t *testing.T) {
 	if out, _ := forget(context.Background(), `{"term":"قلقلی"}`); strings.Contains(out, "error") {
 		t.Fatalf("the teacher could not forget: %s", out)
 	}
-	if _, err := db.GetTerm(testChat, "قلقلی"); err == nil {
+	if termOf(db, testChat, "قلقلی") != nil {
 		t.Fatal("still there")
 	}
 }
@@ -52,11 +54,12 @@ func TestForgetTermPermission(t *testing.T) {
 func TestGlossaryInPrompt(t *testing.T) {
 	b, db, _, fake := replyBot(t, 10, llm.Response{Content: "x"})
 	enableGlossary(b)
-	_, _ = db.PutTerm(testChat, store.Term{Term: "قلقلی", Meaning: "آدم حساس"}, 100)
-	_, _ = db.PutTerm(testChat, store.Term{Term: "لب", Meaning: "نباید بیاد"}, 100) // only inside a word below
-	_, _ = db.PutTerm(testChat, store.Term{Term: "کوه‌نوردی", Meaning: "نباید بیاد"}, 100)
-	before, _ := db.GetTerm(testChat, "قلقلی")
-	_, _ = db.PutTerm(testChat, store.Term{Term: "چاییدن", Meaning: "سرما خوردن"}, 100)
+	addTerm(db, testChat, "قلقلی", "آدم حساس", 0)
+	addTerm(db, testChat, "لب", "نباید بیاد", 0) // only inside a word below
+	addTerm(db, testChat, "کوه‌نوردی", "نباید بیاد", 0)
+	before := termOf(db, testChat, "قلقلی")
+	time.Sleep(2 * time.Millisecond)
+	addTerm(db, testChat, "چاییدن", "سرما خوردن", 0)
 	m := say(b, 1, ali, "هوشنگ این علی خیلی قلقلی‌ه، مطلب داری؟ من که چاییدم")
 	b.runReply(context.Background(), job{kind: jobReply, chatID: testChat, msg: m})
 	p := fake.Calls[0].Messages[1].Content
@@ -69,13 +72,13 @@ func TestGlossaryInPrompt(t *testing.T) {
 	if strings.Contains(p, "نباید بیاد") {
 		t.Errorf("unrelated term in the prompt:\n%s", p)
 	}
-	if after, _ := db.GetTerm(testChat, "قلقلی"); !after.UsedAt.After(before.UsedAt) {
+	if after := termOf(db, testChat, "قلقلی"); !after.LastAt.After(before.LastAt) {
 		t.Error("a shown term was not marked used")
 	}
 }
 
 func TestTermMatchesVerbForms(t *testing.T) {
-	norm := store.NormalizeTerm
+	norm := text.Fold
 	for _, c := range []struct {
 		text, term string
 		want       bool

@@ -44,7 +44,7 @@ func TestStore(t *testing.T) {
 			}
 			m, err := db.UpdateMember(chat, 7, func(m *Member) {
 				m.FirstName, m.Username = "Ali", "AliR"
-				m.Profile.Facts = append(m.Profile.Facts, Item{Text: "lives in Tehran", Locked: true})
+				m.Style.Msgs = 3
 			})
 			if err != nil || m.UserID() != 7 || m.ChatID() != chat {
 				t.Fatal(m, err)
@@ -53,7 +53,7 @@ func TestStore(t *testing.T) {
 			db.UpdateMember(chat, 8, func(m *Member) { m.FirstName = "NoUsername" })
 
 			got, err := db.MemberByUsername(chat, "@alir")
-			if err != nil || got.FirstName != "Ali" || got.Profile.Facts[0].Text != "lives in Tehran" {
+			if err != nil || got.FirstName != "Ali" || got.Style.Msgs != 3 {
 				t.Fatal(got, err)
 			}
 			// rename: the old username must no longer resolve
@@ -149,28 +149,36 @@ func TestGroupEventsAndMessageUpdates(t *testing.T) {
 				t.Fatalf("engagement = %d", m.Engagement())
 			}
 
-			week := 7 * 24 * time.Hour
-			evs := []GroupEvent{
-				{Text: "old", FirstAt: now.Add(-10 * 24 * time.Hour), LastAt: now.Add(-8 * 24 * time.Hour)},
-				{Text: "kept", Score: 5, FirstAt: now.Add(-time.Hour), LastAt: now},
-				{Text: "same instant", FirstAt: now.Add(-time.Hour), LastAt: now},
+			// memories: items get ids, expired ones vanish, entities are separate
+			mem, err := db.UpdateMemory(chat, 7, func(m *Memory) {
+				m.Nickname = "Ali the Great"
+				m.Add(Item{Kind: KindFact, Text: "lives in Tehran", Locked: true, Seen: 2})
+				m.Add(Item{Kind: KindEpisode, Text: "gone", Expires: now.Add(-time.Hour)})
+				m.Add(Item{Kind: KindEpisode, Text: "exam tomorrow", Expires: now.Add(time.Hour)})
+			})
+			if err != nil || len(mem.Items) != 2 || mem.Items[0].ID != 1 || mem.Items[1].ID != 3 || mem.NextID != 4 {
+				t.Fatalf("memory = %+v %v", mem, err)
 			}
-			if err := db.ReplaceGroupEvents(chat, evs, week); err != nil {
+			if got, _ := db.GetMemory(chat, 7); got.Nickname != "Ali the Great" || len(got.Kind(KindEpisode)) != 1 || got.Find(1) == nil {
+				t.Fatalf("GetMemory = %+v", got)
+			}
+			_, _ = db.UpdateMemory(chat, GroupEntity, func(m *Memory) { m.Add(Item{Kind: KindEvent, Text: "hike", Score: 9}) })
+			all, _ := db.MemoriesOf(chat)
+			g := all[GroupEntity]
+			if len(all) != 2 || g.Kind(KindEvent)[0].Text != "hike" || len(all[7].Items) != 2 {
+				t.Fatalf("MemoriesOf = %+v", all)
+			}
+			if n, _ := db.CountMemories(chat); n != 2 {
+				t.Fatalf("CountMemories = %d", n)
+			}
+			if err := db.DeleteMemory(chat, 7); err != nil {
 				t.Fatal(err)
 			}
-			got, err := db.GroupEvents(chat, week)
-			if err != nil || len(got) != 2 || got[0].ID == 0 || got[0].ID == got[1].ID {
-				t.Fatalf("events = %+v %v", got, err)
+			if got, _ := db.GetMemory(chat, 7); !got.Empty() {
+				t.Fatalf("deleted memory still there: %+v", got)
 			}
-			// Replacing with one of them deletes the other.
-			if err := db.ReplaceGroupEvents(chat, got[:1], week); err != nil {
-				t.Fatal(err)
-			}
-			if got2, _ := db.GroupEvents(chat, week); len(got2) != 1 || got2[0].ID != got[0].ID {
-				t.Fatalf("after replace = %+v", got2)
-			}
-			if other, _ := db.GroupEvents(chat-1, week); len(other) != 0 {
-				t.Fatal("events leaked to another chat")
+			if other, _ := db.MemoriesOf(chat - 1); len(other) != 0 {
+				t.Fatal("memories leaked to another chat")
 			}
 		})
 	}

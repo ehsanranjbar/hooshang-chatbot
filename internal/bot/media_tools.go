@@ -30,7 +30,7 @@ func mediaTools() []llm.Tool {
 
 // toolFindMedia is the find_media handler.
 func (b *Bot) toolFindMedia(j job) llm.ToolFunc {
-	return func(_ context.Context, args string) (string, error) {
+	return func(ctx context.Context, args string) (string, error) {
 		var a struct {
 			Query string `json:"query"`
 			Kind  string `json:"kind"`
@@ -45,6 +45,13 @@ func (b *Bot) toolFindMedia(j job) llm.ToolFunc {
 		found, err := b.deps.DB.SearchMedia(kind, a.Query, maxMediaResults)
 		if err != nil {
 			return "error: " + err.Error(), nil
+		}
+		if len(found) < maxMediaResults { // then by meaning
+			skip := map[string]bool{}
+			for _, m := range found {
+				skip[m.UniqueID] = true
+			}
+			found = append(found, b.relatedMedia(ctx, kind, a.Query, maxMediaResults-len(found), skip)...)
 		}
 		if len(found) == 0 {
 			return "nothing found; try another emoji or word, or answer without one", nil

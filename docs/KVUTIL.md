@@ -61,8 +61,10 @@ err = db.AddEdit(chatID, &store.Edit{AdminID: ..., UserID: ..., Request: ..., Op
 es, err := db.RecentEdits(chatID, 10)                          // newest first
 ```
 
-Types (in `internal/store/store.go`): `Chat`, `Member`, `Profile`, `Item`, `Message`, `Edit`, `ModEntry`,
-`Key = codec.Pair[int64, int64]`. A member's IDs are `m.ChatID()` and `m.UserID()`.
+Types (in `internal/store/store.go`, `memory.go`, `rag.go`): `Chat`, `Member` (identity, counters,
+`Style`), `Memory` and `Item` (what is remembered about an entity), `Message`, `Edit`, `ModEntry`,
+`Archived`, `Key = codec.Pair[int64, int64]`, `Key3 = (int64, (int64, int64))`. A member's IDs are
+`m.ChatID()` and `m.UserID()`.
 
 **Rules:**
 
@@ -73,7 +75,9 @@ Types (in `internal/store/store.go`): `Chat`, `Member`, `Profile`, `Item`, `Mess
   Inside the update, re-check whatever you depend on. For example the profile updater must keep
   `Locked` items and `Suppressed` from the *current* stored profile, not from the copy it read
   before the LLM call.
-- `Profile` lives in `store` so that `memory` and `bot` can both use it without import cycles.
+- `Memory` and `Item` live in `store` so that `memory` and `bot` can both use them without import cycles.
+- 2026-11-05: `Profile`, `group_events` and `terms` were replaced by `memories` **without a
+  migration** (the data directory is reset). `Member` lost `Profile`.
 - Adding a field to a struct is safe: values are msgpack and old records decode with the zero
   value. **Renaming or removing a field, or changing its type, needs a store version bump and a migration**
   (section 3.5). Don't do it casually.
@@ -91,10 +95,15 @@ Types (in `internal/store/store.go`): `Chat`, `Member`, `Profile`, `Item`, `Mess
 | `members/by_username` | `index.FieldIndex` | `Pair(chatID, lower(username))` | → member key | members without a username are not indexed |
 | `messages` | `typed.Store` | `Pair(chatID, messageID)` | `Message` | `SetWithTTL`; memkv has no TTL, so it falls back to `Set` |
 | `memory_edits` | `typed.Store` | `Pair(chatID, unixNano)` | `Edit` | |
-| `group_events` | `typed.Store` | `Pair(chatID, FirstAt unixNano)` | `GroupEvent` | `SetWithTTL` from `LastAt`; at most `features.group_memory.max_items` per chat |
+| `memories` | `typed.Store` | `Pair(chatID, entity)` | `Memory` | entity = user id, `GroupEntity` (0) for the group, the bot's id for itself; items of every kind (facts, orders, episodes, events, terms, samples, …); `GetMemory`, `UpdateMemory`, `DeleteMemory`, `MemoriesOf`; expired items are pruned on read and write |
 | `media` | `typed.Store` | `Pair(0, FNV-64a of "media:"+file_unique_id)` | `MediaDesc` | sticker/GIF descriptions shared by all chats; `SetWithTTL` `features.media.cache_ttl` |
 | `mod_log` | `typed.Store` | `Pair(chatID, unixNano)` | `ModEntry` | audit log of the admin's moderation actions (also refused and failed ones); `AddModEntry`, `RecentModEntries(chat, n)` |
-| `terms` | `typed.Store` | `Pair(chatID, FNV-64a of NormalizeTerm(term))` | `Term` | at most `features.glossary.max_items` per chat; `PutTerm` evicts the oldest `UsedAt` in the same transaction |
+| `archive` | `typed.Store` | `Pair(chatID, messageID)` | `Archived` | member messages kept for retrieval, `SetWithTTL` `features.rag.archive_ttl` |
+| `archive_by_user` | `typed.Store` | `(chatID, (userID, messageID))` | empty | lets `PurgeArchive` delete one member's rows; same TTL |
+| `msg_vectors` | `typed.Store` | `Pair(chatID, messageID)` | `rag.Vector` | int8 embeddings of archived messages; same TTL; loaded into a per-chat in-memory index |
+| `item_vectors` | `typed.Store` | `(chatID, (entity, itemID))` | `rag.Vector` | embeddings of memory items |
+| `media_vectors` | `typed.Store` | `Pair(0, media hash)` | `rag.Vector` | embeddings of sticker/GIF descriptions |
+| `meta` | `typed.Store` | `string` | `EmbeddingMeta` | `"embedding"`: the model that made the vectors; a change wipes them |
 
 Group chat IDs are negative. Integer keys sort correctly with negative values (this is tested).
 
