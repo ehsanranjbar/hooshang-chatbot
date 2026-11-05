@@ -1,0 +1,7 @@
+# local config (holds the bot token) and the Badger data
+config.yaml
+data/
+/hooshang
+
+# IranNastaliq is not redistributable; point faal.font at your own copy if you have one
+internal/faalimg/fonts/IranNastaliq.ttf

@@ -1,0 +1,92 @@
+# Example hooshang configuration. Copy to config.yaml and adjust.
+# Environment overrides:
+#   HOOSHANG_TELEGRAM_TOKEN  -> telegram.token
+#   HOOSHANG_LLM_API_KEY     -> llm.api_key
+
+telegram:
+  token: "123456:FAKE-TELEGRAM-TOKEN"
+  owner_id: 123456789        # your Telegram user ID (find it with @userinfobot)
+
+llm:
+  base_url: "http://localhost:1234/v1"   # LM Studio; later: https://openrouter.ai/api/v1
+  api_key: "lm-studio"
+  model: "gemma-4-31b-it-mlx"            # required
+  memory_model: ""                       # empty = same as model
+  temperature: 0.9                       # memory calls always use 0.2
+  max_tokens: 4096                       # min 1024 (the model reasons before answering)
+  timeout: 180s                          # tool rounds plus reasoning can take a minute
+  tools: true                            # enable LLM tool calling (faal/poem, admin memory edits)
+  json_schema: true                      # response_format json_schema for memory extraction (31B: 5/5, 2x faster; breaks the 26B)
+
+bot:
+  name: "هوشنگ"
+  aliases: ["هوشی", "hooshang"]
+  language: "fa"
+  history_messages: 15                   # max messages of the transcript sent to the LLM
+  history_window: 20m                    # ...and only those this recent, so old topics drop out
+  profile_budget: 3000                   # characters of member profiles per prompt: the people the message
+                                         # is about and the author first, then members in the history, then
+  random_profiles: 2                     # this many random other members, while the budget allows
+  message_retention: 72h                 # how long plain messages are kept
+  spontaneous_chance: 0.07               # chance of speaking when not addressed, [0,1]
+  reaction_chance: 0.15                  # chance of reacting with an emoji when not addressed
+  reaction_cooldown: 1m                  # min time between such reactions
+  spontaneous_cooldown: 5m               # min time between spontaneous messages
+  min_msgs_between: 8                    # min new messages before a spontaneous attempt
+  modes:                                 # weights for spontaneous topics; merges with the
+                                         # defaults (set a mode to 0 to disable it)
+    joke: 3
+    tease: 3
+    flirt: 1
+    compliment: 2
+    comment: 2
+  rate_limit:
+    global_per_minute: 10
+    chat_per_minute: 6
+
+memory:
+  update_every: 15                       # update a profile every N new messages
+  max_age: 24h                           # older profiles are re-checked
+  context_messages: 150                  # messages the memory updater sees
+  max_items: 10                          # max items per profile section
+
+# Group memory: the topics and events the group cared about most (by reactions
+# and replies). Reactions are only delivered while the bot is a group admin.
+group_memory:
+  enabled: true
+  ttl: 168h                              # forget an event a week after it was last seen
+  max_items: 15                          # kept per group, highest engagement first
+  update_every: 50                       # group messages between updates
+  in_prompt: 4                           # events shown to the model
+  prompt_chance: 0.3                     # how often they're shown in a reply / spontaneous message
+
+# Glossary: the group's own words and phrases (اصطلاحات). Anyone can teach one
+# («هوشنگ، "چاییدن" یعنی سرما خوردن»). When it is full, the term used least
+# recently is forgotten. Only the terms that come up in the conversation are shown.
+glossary:
+  enabled: true
+  max_items: 100                         # terms kept per group (LRU)
+  in_prompt: 8                           # terms shown to the model at most
+
+# Media: photos, stickers and GIFs are described by the model (it must be a
+# vision model, e.g. Gemma 4) and the description is added to the transcript:
+# «[استیکر: 😂 — گربه‌ای که از خنده غش کرده]». Sticker and GIF descriptions are
+# cached by Telegram's file id and reused in every group.
+media:
+  enabled: true
+  photos: true
+  stickers: true
+  gifs: true                             # from the GIF's thumbnail (its first frame)
+  words: 30                              # description length in words
+  cache_ttl: 2160h                       # reuse sticker/GIF descriptions for 90 days
+  max_queue: 20                          # pending descriptions; more are skipped
+
+faal:
+  image: true                            # send the ghazal as a Nastaliq image (معنی in the caption)
+  poem_images: true                      # send /poem's 2 بیت as the same Nastaliq card
+  font: ""                               # a Nastaliq .ttf; empty = embedded Gulzar (HarfBuzz) or Noto Nastaliq Urdu (go-text)
+  shaper: auto                           # auto: HarfBuzz's hb-shape if installed (brew install harfbuzz),
+                                         # else go-text, which draws Nastaliq flat with some dots misplaced
+
+storage:
+  path: "./data"                         # Badger data directory

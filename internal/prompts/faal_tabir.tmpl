@@ -1,0 +1,20 @@
+This Hafez faal was drawn for the asker:
+{{.Poem}}
+{{- if .Summary }}
+
+The meaning (معنی):
+{{.Summary}}
+{{- end}}
+
+
+The asker: {{.Asker}}
+{{- if .Profile }}
+What you know about them:
+{{.Profile}}
+{{- end}}
+{{- if .Wish }}
+
+The asker's wish: {{.Wish}}
+{{- end}}
+Write a warm, a little playful interpretation (تعبیر) of 2–3 short sentences, addressed to the asker.{{if not .Summary}} Start with a short معنی of the poem, then the تعبیر.{{end}}
+Always answer in {{.Language}} (Persian).
