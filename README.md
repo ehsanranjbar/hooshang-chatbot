@@ -6,8 +6,16 @@ about each member, and keeps a short memory of what the group cared about this w
 
 What it does:
 
-- **Chats** when addressed by name, mention or reply, and now and then on its own (jokes, teasing,
-  compliments, emoji reactions). Teasing is opt-out (`/notease`).
+- **Chats** when addressed by name, mention or reply (and when answering a question it just asked),
+  and now and then on its own (jokes, teasing, compliments, emoji reactions, a sticker). Teasing is
+  opt-out (`/notease`).
+- **Acts like a member:** waits as if typing, sometimes answers late, splits an answer into a few
+  bubbles, sleeps at night (`bot.human.quiet_hours`), has a mood of the day, answers «صبح بخیر» and
+  «شب بخیر» now and then, welcomes new members and comments on leavers, mentions people with
+  @username or a tap-able name, and knows the Persian (Jalali) date.
+- **Persona in config:** the system prompt is short and general; the behaviour rules live in
+  `bot.persona.notes` where you can edit or delete them. The hard limits (slurs, sexual insults,
+  threats, فحش ناموسی) stay in the prompt.
 - **Remembers members** per group: a profile with facts, interests, quirks, relationships and
   boundaries, updated from the conversation every few messages. The admin edits memory in plain
   language («هوشنگ، علی دیگه تهران نیست، رفته شیراز») and gives standing orders («با سارا شوخی نکن»).

@@ -201,8 +201,7 @@ func RenderGroup(events []store.GroupEvent, n int, now time.Time) string {
 	sort.SliceStable(top, func(i, j int) bool { return top[i].LastAt.After(top[j].LastAt) })
 	var lines []string
 	for _, e := range top {
-		days := int(now.Sub(e.LastAt).Hours() / 24)
-		lines = append(lines, "- ("+i18n.Ago(days)+") "+e.Text)
+		lines = append(lines, "- ("+i18n.When(e.LastAt, now)+") "+e.Text)
 	}
 	return strings.Join(lines, "\n")
 }

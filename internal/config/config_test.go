@@ -80,7 +80,7 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	if c.Bot.MinMsgsBetween != 8 {
 		t.Errorf("MinMsgsBetween = %d", c.Bot.MinMsgsBetween)
 	}
-	wantModes := map[string]int{"joke": 3, "tease": 3, "flirt": 1, "compliment": 2, "comment": 2}
+	wantModes := map[string]int{"joke": 3, "tease": 3, "flirt": 1, "compliment": 2, "comment": 2, "sticker": 1}
 	if len(c.Bot.Modes) != len(wantModes) {
 		t.Errorf("Modes = %v, want %v", c.Bot.Modes, wantModes)
 	} else {
@@ -163,7 +163,7 @@ storage:
 	}
 	// modes merges with the defaults: the one key from the file overrides,
 	// the remaining keys keep their default weights.
-	wantModes := map[string]int{"joke": 1, "tease": 3, "flirt": 1, "compliment": 2, "comment": 2}
+	wantModes := map[string]int{"joke": 1, "tease": 3, "flirt": 1, "compliment": 2, "comment": 2, "sticker": 1}
 	if len(c.Bot.Modes) != len(wantModes) {
 		t.Errorf("Modes = %v, want merged %v", c.Bot.Modes, wantModes)
 	} else {

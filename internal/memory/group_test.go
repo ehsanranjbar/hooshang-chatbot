@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"github.com/ehsanranjbar/hooshang/internal/i18n"
 	"strings"
 	"testing"
 	"time"
@@ -138,7 +139,7 @@ func TestRenderGroup(t *testing.T) {
 		{Text: "کم", Score: 1, LastAt: now},
 	}
 	got := RenderGroup(evs, 2, now)
-	want := "- (دیروز) دیروزی\n- (۳ روز پیش) قدیمی و مهم"
+	want := "- (دیروز) دیروزی\n- (" + i18n.FormatDate(now.Add(-3*24*time.Hour)) + ") قدیمی و مهم"
 	if got != want {
 		t.Fatalf("got\n%s\nwant\n%s", got, want)
 	}

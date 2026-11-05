@@ -7,14 +7,26 @@ import (
 )
 
 func TestSystemRenders(t *testing.T) {
-	out, err := System(SystemData{Name: "هوشنگ", Language: "fa", Now: "2026-11-04 14:00"})
+	out, err := System(SystemData{Name: "هوشنگ", Language: "fa", Now: "2026-11-04 14:00", Notes: []string{"Never use emoji."}, Mood: "a bit sleepy"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"هوشنگ", "2026-11-04 14:00", "Persian", "محاوره", "boundaries", "roast", "Hafez"} {
+	for _, want := range []string{"هوشنگ", "2026-11-04 14:00", "Persian", "محاوره", "Hard limits", "فحش ناموسی", "react", "Never use emoji.", "Today you are a bit sleepy", "Jalali"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("system prompt missing %q", want)
 		}
+	}
+	for _, gone := range []string{"Mushy", "Flirting", "roast"} {
+		if strings.Contains(out, gone) {
+			t.Errorf("system prompt still has the behaviour rule %q", gone)
+		}
+	}
+	custom, _ := System(SystemData{Name: "x", Language: "fa", Now: "n", Persona: "You are Hooshi, the group's grandpa."})
+	if !strings.Contains(custom, "grandpa") || strings.Contains(custom, "محاوره") {
+		t.Errorf("persona text did not replace the identity paragraph:\n%s", custom)
+	}
+	if MoodPhrase("normal") != "" || MoodPhrase("sleepy") == "" || MoodPhrase("custom mood") != "custom mood" {
+		t.Error("MoodPhrase")
 	}
 }
 
@@ -126,7 +138,7 @@ func TestAdminRules(t *testing.T) {
 func TestFormatNow(t *testing.T) {
 	tz, _ := time.LoadLocation("Asia/Tehran")
 	got := FormatNow(time.Date(2026, 11, 4, 11, 0, 0, 0, time.UTC))
-	want := time.Date(2026, 11, 4, 11, 0, 0, 0, time.UTC).In(tz).Format("2006-01-02 15:04")
+	want := "چهارشنبه ۱۳ آبان ۱۴۰۵، ۱۴:۳۰ (" + time.Date(2026, 11, 4, 11, 0, 0, 0, time.UTC).In(tz).Format("2006-01-02 15:04") + ")"
 	if got != want {
 		t.Errorf("FormatNow = %q, want %q", got, want)
 	}

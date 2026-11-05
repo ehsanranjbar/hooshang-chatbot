@@ -47,11 +47,12 @@ type Bot struct {
 	botID       int64
 	botUsername string
 	workers     *workers
-	rollFn      func() float64 // nil = math/rand; DumpPrompt pins it
-	describer   *enricher      // background media descriptions; nil until Run (and without features.media)
-	transcriber *enricher      // background voice transcriptions; nil until Run (and without features.voice)
-	ffOnce      sync.Once      // resolves ffmpeg and ffprobe on first use
-	ffmpeg      string         // "" = not installed
+	rollFn      func() float64                             // nil = math/rand; DumpPrompt pins it
+	sleepFn     func(ctx context.Context, d time.Duration) // nil = a real wait; tests skip it
+	describer   *enricher                                  // background media descriptions; nil until Run (and without features.media)
+	transcriber *enricher                                  // background voice transcriptions; nil until Run (and without features.voice)
+	ffOnce      sync.Once                                  // resolves ffmpeg and ffprobe on first use
+	ffmpeg      string                                     // "" = not installed
 	ffprobe     string
 	accessMu    sync.Mutex
 	accessCache map[int64]accessEntry
@@ -209,7 +210,14 @@ func (b *Bot) handleMessage(ctx context.Context, m *telego.Message) {
 		return
 	}
 
-	// Compute the text (or a media tag); ignore service messages.
+	// Joins and leaves are the one kind of service message that matters.
+	if len(m.NewChatMembers) > 0 || m.LeftChatMember != nil {
+		if !stale {
+			b.handleMembership(ctx, m)
+		}
+		return
+	}
+	// Compute the text (or a media tag); ignore other service messages.
 	text, isService := messageText(m)
 	if isService {
 		return
@@ -268,12 +276,29 @@ func (b *Bot) addressed(m *telego.Message, transcript string) bool {
 // bot, else maybe a reaction or a spontaneous message.
 func (b *Bot) replyOrSpontaneous(m *telego.Message, transcript string) {
 	chat := m.Chat
-	if b.addressed(m, transcript) {
+	c, _ := b.deps.DB.GetChat(chat.ID)
+	if b.addressed(m, transcript) || b.isFollowUp(c, m) {
 		b.enqueueReply(job{kind: jobReply, chatID: chat.ID, msg: m})
 		return
 	}
-	c, _ := b.deps.DB.GetChat(chat.ID)
+	if b.inQuietHours(time.Now()) {
+		return // asleep: no greetings, reactions or spontaneous messages
+	}
+	text := m.Text
+	if text == "" {
+		text = m.Caption
+	}
+	if transcript != "" {
+		text = transcript
+	}
+	if b.maybeGreet(c, m, text) {
+		return
+	}
 	if ShouldReact(c, time.Now(), b.deps.Cfg.Bot.ReactionChance, b.deps.Cfg.Bot.ReactionCooldown, b.roll()) {
+		if b.deps.Cfg.Features.Media.On() && b.deps.Cfg.Features.Media.Send && b.roll() < stickerReactionShare {
+			b.enqueueSpontaneous(job{kind: jobSpontaneous, chatID: chat.ID, mode: "sticker"})
+			return
+		}
 		b.enqueueSpontaneous(job{kind: jobReaction, chatID: chat.ID, msg: m})
 		return // a reaction is the bot's answer to this message
 	}
@@ -289,6 +314,10 @@ func (b *Bot) replyOrSpontaneous(m *telego.Message, transcript string) {
 		})
 	}
 }
+
+// stickerReactionShare is the share of spontaneous reactions that are a
+// sticker or GIF instead of an emoji (when media sending is on).
+const stickerReactionShare = 0.2
 
 // names returns the bot's names and aliases.
 func (b *Bot) names() []string {

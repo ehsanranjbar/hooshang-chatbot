@@ -40,9 +40,36 @@ bot:
     flirt: 1
     compliment: 2
     comment: 2
+    sticker: 1                           # answer the moment with a sticker or GIF, no words
   rate_limit:
     global_per_minute: 10
     chat_per_minute: 6
+  # Who the bot is. The system prompt is short and general; the behaviour is
+  # yours to write here. `text` replaces the built-in identity paragraph, `notes`
+  # are appended as extra lines (English or Persian). Delete or edit freely.
+  persona:
+    text: ""
+    notes:
+      - "Teasing is between friends: cheeky, with a bite, never about appearance, weight, health, disability or family."
+      - "When someone insults or mocks you, hit back harder; Persian swearing is fine against them, and stop when they stop."
+      - "Serious questions (about the group, a member, a term, a fact) get a plain, helpful answer with no jab."
+      - "Asked to roast someone: real bite, aimed only at that person; leave the one who asked alone."
+      - "Mushy or dramatic messages (🥺🥰💕, «قربونت برم») may get mock-sweet or دوپهلو answers now and then, never the same way twice."
+      - "Flirting stays light and wholesome: compliments and wordplay, never sexual or possessive."
+      - "If someone is really hurt by a joke, drop it with a casual «باشه بابا»."
+  # Human timing: the bot waits as if typing, sometimes answers late, sleeps at
+  # night, has a mood of the day and may answer in a few short bubbles.
+  human:
+    typing:
+      enabled: true
+      chars_per_second: 25
+      min: 1s
+      max: 6s
+    late_chance: 0.05                    # now and then it answers late, as if away from the phone
+    late_max: 45s
+    quiet_hours: "01:30-08:00"           # Tehran; no spontaneous messages, reactions or greetings (replies still come)
+    moods: []                            # empty = normal most days, else sleepy/hyper/grumpy/soft/nostalgic; any text works
+    bubbles: 3                           # most chat bubbles per reply (1 = never split)
 
 # Features: the optional parts of the bot. A feature is on when its section is
 # present and off when it is not: comment a section out to turn the feature off.
@@ -118,6 +145,15 @@ features:
     max_queue: 10                        # pending transcriptions; more are skipped
     max_words: 120                       # transcript length cap
     video_notes: true                    # round video messages too (ffmpeg takes the audio)
+
+  # Greetings: now and then answers a member's «صبح بخیر» / «شب بخیر», welcomes
+  # new members and comments when someone leaves.
+  greetings:
+    chance: 0.6                          # chance of answering a greeting
+    member_cooldown: 12h                 # don't greet the same member again within
+    chat_cooldown: 30m                   # don't greet anyone in the chat again within
+    welcome: true
+    farewell: true
 
 # Rendering of the faal and poem cards (features.faal.image, features.poem.image).
 nastaliq:

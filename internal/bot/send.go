@@ -33,27 +33,37 @@ func (b *Bot) send(ctx context.Context, chatID int64, replyTo int, text string) 
 // sendChunks sends exactly the given chunks (one reserved limiter slot each).
 func (b *Bot) sendChunks(ctx context.Context, chatID int64, replyTo int, chunks []string) error {
 	for _, chunk := range chunks {
-		p := &telego.SendMessageParams{
-			ChatID: newChatID(chatID),
-			Text:   chunk,
-		}
-		if replyTo > 0 {
-			p.ReplyParameters = &telego.ReplyParameters{
-				MessageID:                replyTo,
-				AllowSendingWithoutReply: true,
-			}
-		}
-		msg, err := b.deps.TG.SendMessage(ctx, p)
-		if err != nil {
-			if isFloodControl(err) {
-				b.logger.Warn("send: flood control (429), giving up", "chat", chatID)
-			} else {
-				b.logger.Error("send failed", "chat", chatID, "err", err)
-			}
+		if err := b.sendOne(ctx, chatID, replyTo, chunk, nil); err != nil {
 			return err
 		}
-		b.recordSent(chatID, msg)
 	}
+	return nil
+}
+
+// sendOne sends one message (one reserved limiter slot), with optional
+// entities (text mentions), and records it.
+func (b *Bot) sendOne(ctx context.Context, chatID int64, replyTo int, text string, entities []telego.MessageEntity) error {
+	p := &telego.SendMessageParams{
+		ChatID:   newChatID(chatID),
+		Text:     text,
+		Entities: entities,
+	}
+	if replyTo > 0 {
+		p.ReplyParameters = &telego.ReplyParameters{
+			MessageID:                replyTo,
+			AllowSendingWithoutReply: true,
+		}
+	}
+	msg, err := b.deps.TG.SendMessage(ctx, p)
+	if err != nil {
+		if isFloodControl(err) {
+			b.logger.Warn("send: flood control (429), giving up", "chat", chatID)
+		} else {
+			b.logger.Error("send failed", "chat", chatID, "err", err)
+		}
+		return err
+	}
+	b.recordSent(chatID, msg)
 	return nil
 }
 

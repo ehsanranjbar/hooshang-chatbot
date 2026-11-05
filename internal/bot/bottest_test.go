@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"context"
 	"log/slog"
 	"time"
 
@@ -37,6 +38,7 @@ func newTestConfig() *config.Config {
 	cfg.Bot.SpontaneousCooldown = 5 * time.Minute
 	cfg.Bot.MinMsgsBetween = 1
 	cfg.Bot.Modes = map[string]int{"joke": 3, "tease": 3, "flirt": 1, "compliment": 2, "comment": 2}
+	cfg.Bot.Human.Bubbles = 3
 	cfg.Bot.RateLimit.GlobalPerMinute = 1000
 	cfg.Bot.RateLimit.ChatPerMinute = 1000
 	cfg.Features.Profiles = &config.ProfilesFeature{Enabled: true, UpdateEvery: 15, MaxAge: 24 * time.Hour, ContextMessages: 150, MaxItems: 10}
@@ -68,6 +70,7 @@ func newTestBot(tg TG, botID int64, botUsername string) (*Bot, *store.DB) {
 		botID:       botID,
 		botUsername: botUsername,
 		accessCache: make(map[int64]accessEntry),
+		sleepFn:     func(context.Context, time.Duration) {}, // no typing delays in tests
 	}
 	b.workers = newWorkers(b)
 	return b, db

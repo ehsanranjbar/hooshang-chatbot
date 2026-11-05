@@ -1,6 +1,7 @@
 package ganjoor
 
 import (
+	"github.com/ehsanranjbar/hooshang/internal/text"
 	"strings"
 	"unicode"
 )
@@ -36,26 +37,8 @@ var aliases = map[string]int{
 	"ایرجمیرزا":     88,
 }
 
-// normalizePersian removes zero-width non-joiners and spaces, and folds
-// ي→ی and ك→ک so poet names match regardless of spelling variants.
-func normalizePersian(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		switch r {
-		case '\u200C', ' ':
-			continue
-		case 'ي':
-			b.WriteRune('ی')
-		case 'ك':
-			b.WriteRune('ک')
-		case 'ـ':
-			continue
-		default:
-			b.WriteRune(unicode.ToLower(r))
-		}
-	}
-	return b.String()
-}
+// normalizePersian folds a poet name (text.Squash) so spelling variants match.
+func normalizePersian(s string) string { return text.Squash(s) }
 
 // PoetID resolves a poet name to its Ganjoor poet ID. Spelling variants,
 // ZWNJs and spaces don't matter, and a longer form works when one of its words

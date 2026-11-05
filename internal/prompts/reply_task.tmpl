@@ -23,6 +23,12 @@ Recent messages, oldest first ([id] name: text, ↩︎[id] = a reply to that mes
 
 {{.Task}}
 Answer the >> message itself. The earlier messages are only there so you understand it: don't bring back their topics unless the >> message is about them.
+{{- if gt .Bubbles 1 }}
+You may send up to {{.Bubbles}} short chat bubbles instead of one: put a line with only --- between them. Most answers are one bubble.
+{{- end }}
+{{- if .Mentions }}
+To mention a member write @username, or {mention:ID} with the id shown after their name when they have no username.
+{{- end }}
 {{- if .Variety }}
 {{.Variety}}
 {{- end}}

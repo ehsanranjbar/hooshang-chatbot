@@ -122,11 +122,7 @@ func (b *Bot) runReaction(ctx context.Context, j job) {
 	}
 	_ = b.deps.DB.UpdateChat(j.chatID, func(c *store.Chat) { c.LastReactionAt = time.Now() })
 	msgs := b.transcriptMessages(j)
-	sys, _ := prompts.System(prompts.SystemData{
-		Name:     b.deps.Cfg.Bot.Name,
-		Language: b.deps.Cfg.Bot.Language,
-		Now:      prompts.FormatNow(time.Now()),
-	})
+	sys := b.systemPrompt(j.chatID)
 	task, _ := prompts.ReactionTask(prompts.TaskData{
 		Language:   b.deps.Cfg.Bot.Language,
 		Orders:     b.renderOrders(j, msgs),

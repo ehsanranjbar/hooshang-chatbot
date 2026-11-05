@@ -2,8 +2,8 @@
 package memory
 
 import (
+	"github.com/ehsanranjbar/hooshang/internal/text"
 	"strings"
-	"unicode"
 
 	"github.com/ehsanranjbar/hooshang/internal/store"
 )
@@ -25,24 +25,8 @@ func Sections() []string {
 	return []string{"nickname", "summary", "facts", "interests", "quirks", "relationships", "boundaries", "orders"}
 }
 
-// Normalize folds Persian text for comparison: it removes ZWNJs and spaces,
-// folds ي→ی and ك→ک, and lowercases.
-func Normalize(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		switch r {
-		case '\u200C', ' ':
-			continue
-		case 'ي':
-			b.WriteRune('ی')
-		case 'ك':
-			b.WriteRune('ک')
-		default:
-			b.WriteRune(unicode.ToLower(r))
-		}
-	}
-	return b.String()
-}
+// Normalize folds Persian text for comparison (text.Squash: folded, no spaces).
+func Normalize(s string) string { return text.Squash(s) }
 
 // itemsOf returns the item slice of a section (or nil for nickname/summary/
 // unknown sections).

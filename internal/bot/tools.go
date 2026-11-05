@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/ehsanranjbar/hooshang/internal/text"
 	"strconv"
 	"strings"
 
@@ -412,24 +413,8 @@ func (b *Bot) resolveMember(chatID int64, s string, j job) (int64, error) {
 	}
 }
 
-// normalizeName folds a name for matching: lowercases, ي→ی, ك→ک, drops ZWNJ
-// and spaces.
-func normalizeName(s string) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(s) {
-		switch r {
-		case '\u200c', ' ':
-			continue
-		case 'ي':
-			b.WriteRune('ی')
-		case 'ك':
-			b.WriteRune('ک')
-		default:
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
-}
+// normalizeName folds a name for matching (text.Squash).
+func normalizeName(s string) string { return text.Squash(s) }
 
 // matchesName reports whether a member matches a normalized name on first,
 // last or full name.

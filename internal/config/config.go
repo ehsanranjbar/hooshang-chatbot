@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -49,6 +50,25 @@ type Config struct {
 			GlobalPerMinute int `yaml:"global_per_minute"`
 			ChatPerMinute   int `yaml:"chat_per_minute"`
 		} `yaml:"rate_limit"`
+		// Persona is who the bot is, in the admin's words (English or Persian).
+		Persona struct {
+			Text  string   `yaml:"text"`  // replaces the built-in identity paragraph when set
+			Notes []string `yaml:"notes"` // extra behaviour notes appended to the system prompt
+		} `yaml:"persona"`
+		// Human makes the bot's timing feel like a person's.
+		Human struct {
+			Typing struct {
+				Enabled        bool          `yaml:"enabled"`          // wait as if typing before the first bubble; default true
+				CharsPerSecond int           `yaml:"chars_per_second"` // default 25
+				Min            time.Duration `yaml:"min"`              // default 1s
+				Max            time.Duration `yaml:"max"`              // default 6s
+			} `yaml:"typing"`
+			LateChance float64       `yaml:"late_chance"` // chance of answering late, [0,1]; default 0.05
+			LateMax    time.Duration `yaml:"late_max"`    // the longest "late"; default 45s
+			QuietHours string        `yaml:"quiet_hours"` // "HH:MM-HH:MM" Tehran: no spontaneous messages, reactions or greetings; default "01:30-08:00"; "" = none
+			Moods      []string      `yaml:"moods"`       // the moods a day is drawn from; empty = the built-in list (see prompts.Moods)
+			Bubbles    int           `yaml:"bubbles"`     // most chat bubbles per reply; default 3; 1 = never split
+		} `yaml:"human"`
 	} `yaml:"bot"`
 	// Features are the optional capabilities. A feature is on when its section
 	// is present (and not "enabled: false"); see Features.
@@ -85,7 +105,15 @@ func defaults() *Config {
 	c.Bot.SpontaneousChance = 0.07
 	c.Bot.SpontaneousCooldown = 5 * time.Minute
 	c.Bot.MinMsgsBetween = 8
-	c.Bot.Modes = map[string]int{"joke": 3, "tease": 3, "flirt": 1, "compliment": 2, "comment": 2}
+	c.Bot.Modes = map[string]int{"joke": 3, "tease": 3, "flirt": 1, "compliment": 2, "comment": 2, "sticker": 1}
+	c.Bot.Human.Typing.Enabled = true
+	c.Bot.Human.Typing.CharsPerSecond = 25
+	c.Bot.Human.Typing.Min = time.Second
+	c.Bot.Human.Typing.Max = 6 * time.Second
+	c.Bot.Human.LateChance = 0.05
+	c.Bot.Human.LateMax = 45 * time.Second
+	c.Bot.Human.QuietHours = "01:30-08:00"
+	c.Bot.Human.Bubbles = 3
 	c.Bot.RateLimit.GlobalPerMinute = 10
 	c.Bot.RateLimit.ChatPerMinute = 6
 	c.Bot.ReactionChance = 0.15
@@ -182,9 +210,9 @@ func (c *Config) Validate() error {
 	}
 	for k, v := range c.Bot.Modes {
 		switch k {
-		case "joke", "tease", "flirt", "compliment", "comment":
+		case "joke", "tease", "flirt", "compliment", "comment", "sticker":
 		default:
-			return fmt.Errorf("bot.modes: unknown mode %q (allowed: joke, tease, flirt, compliment, comment)", k)
+			return fmt.Errorf("bot.modes: unknown mode %q (allowed: joke, tease, flirt, compliment, comment, sticker)", k)
 		}
 		if v < 0 {
 			return fmt.Errorf("bot.modes[%q] must be >= 0, got %d", k, v)
@@ -199,10 +227,51 @@ func (c *Config) Validate() error {
 	if c.Bot.ReactionChance < 0 || c.Bot.ReactionChance > 1 || c.Bot.ReactionCooldown < 0 {
 		return fmt.Errorf("bot.reaction_chance must be in [0, 1] and reaction_cooldown >= 0")
 	}
+	h := c.Bot.Human
+	if h.Typing.CharsPerSecond < 1 || h.Typing.Min < 0 || h.Typing.Max < h.Typing.Min {
+		return fmt.Errorf("bot.human.typing: chars_per_second >= 1 and 0 <= min <= max")
+	}
+	if h.LateChance < 0 || h.LateChance > 1 || h.LateMax < 0 {
+		return fmt.Errorf("bot.human.late_chance must be in [0, 1] and late_max >= 0")
+	}
+	if _, _, err := ParseQuietHours(h.QuietHours); err != nil {
+		return fmt.Errorf("bot.human.quiet_hours: %w", err)
+	}
+	if h.Bubbles < 1 || h.Bubbles > 5 {
+		return fmt.Errorf("bot.human.bubbles must be in [1, 5], got %d", h.Bubbles)
+	}
 	switch c.Nastaliq.Shaper {
 	case "auto", "harfbuzz", "go":
 	default:
 		return fmt.Errorf("nastaliq.shaper must be auto, harfbuzz or go, got %q", c.Nastaliq.Shaper)
 	}
 	return c.Features.validate()
+}
+
+// ParseQuietHours parses "HH:MM-HH:MM" into minutes of the day; "" is no
+// quiet hours (ok is false). The range may cross midnight.
+func ParseQuietHours(s string) (from, to int, err error) {
+	if s == "" {
+		return 0, 0, nil
+	}
+	a, b, found := strings.Cut(s, "-")
+	if !found {
+		return 0, 0, fmt.Errorf("want HH:MM-HH:MM, got %q", s)
+	}
+	if from, err = parseHM(a); err != nil {
+		return 0, 0, err
+	}
+	if to, err = parseHM(b); err != nil {
+		return 0, 0, err
+	}
+	return from, to, nil
+}
+
+// parseHM parses "HH:MM" into minutes of the day.
+func parseHM(s string) (int, error) {
+	t, err := time.Parse("15:04", strings.TrimSpace(s))
+	if err != nil {
+		return 0, fmt.Errorf("want HH:MM, got %q", s)
+	}
+	return t.Hour()*60 + t.Minute(), nil
 }

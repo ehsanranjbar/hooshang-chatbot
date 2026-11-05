@@ -119,3 +119,10 @@ func persianDigits(n int) string {
 	}
 	return string(out)
 }
+
+// MorningGreetings and NightGreetings are how members greet the group; a
+// message containing one (after folding) may get a greeting back.
+var (
+	MorningGreetings = []string{"صبح بخیر", "صبحتون بخیر", "صبح‌تون بخیر", "صبح همگی بخیر", "صبح به خیر", "روز بخیر", "روزتون بخیر", "ظهر بخیر"}
+	NightGreetings   = []string{"شب بخیر", "شبتون بخیر", "شب‌تون بخیر", "شب همگی بخیر", "شب به خیر", "شب خوش", "بخوابیم", "رفتم بخوابم", "خوابم میاد"}
+)

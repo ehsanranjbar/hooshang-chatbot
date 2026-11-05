@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"github.com/ehsanranjbar/hooshang/internal/text"
 	"strings"
 	"time"
 	"unicode"
@@ -112,22 +113,9 @@ func containsWholeWord(text, word string) bool {
 	return false
 }
 
-// toLowerFold lowercases and folds Persian ي→ی and ك→ک so name matching is
-// spelling-insensitive.
-func toLowerFold(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		switch r {
-		case 'ي':
-			b.WriteRune('ی')
-		case 'ك':
-			b.WriteRune('ک')
-		default:
-			b.WriteRune(unicode.ToLower(r))
-		}
-	}
-	return b.String()
-}
+// toLowerFold lowercases and folds ي→ی and ك→ک, keeping the rune positions
+// (text.FoldKeepLen), so the match's neighbours can be inspected.
+func toLowerFold(s string) string { return text.FoldKeepLen(s) }
 
 // ShouldSpontaneous reports whether the bot may post a spontaneous message:
 // the chat is not muted, the cooldown has elapsed, enough member messages
@@ -159,7 +147,7 @@ func PickMode(weights map[string]int, roll float64) string {
 	}
 	target := roll * float64(total)
 	cum := 0.0
-	order := []string{"joke", "tease", "flirt", "compliment", "comment"}
+	order := []string{"joke", "tease", "flirt", "compliment", "comment", "sticker"}
 	for _, mode := range order {
 		w := weights[mode]
 		if w <= 0 {

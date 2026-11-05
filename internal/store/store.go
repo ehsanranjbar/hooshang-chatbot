@@ -43,6 +43,16 @@ type Chat struct {
 
 	MsgsSinceGroupUpdate int       // messages since the group memory was last updated
 	GroupUpdatedAt       time.Time // when the group memory was last updated
+
+	LastGreetingAt  time.Time   // when the bot last answered a صبح/شب بخیر here
+	LastBotQuestion BotQuestion // the question the bot last asked someone, so their next message counts as an answer
+}
+
+// BotQuestion is a question the bot asked a member (its reply ended with «؟»).
+type BotQuestion struct {
+	UserID int64
+	MsgID  int64
+	At     time.Time
 }
 
 // Item is one remembered thing.
@@ -81,6 +91,7 @@ type Member struct {
 	MsgsSinceUpdate  int
 	LastSeen         time.Time
 	ProfileUpdatedAt time.Time
+	LastGreetedAt    time.Time // when the bot last answered this member's صبح/شب بخیر
 }
 
 func (m *Member) GetId() Key   { return m.ID }

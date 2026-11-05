@@ -753,16 +753,19 @@ func TestBacklogIsStoredButNotAnswered(t *testing.T) {
 
 func TestVarietyNote(t *testing.T) {
 	b, db, _, fake := replyBot(t, 10, llm.Response{Content: "x"})
-	for i, txt := range []string{"آره بابا تو همیشه دیر میای", "ای جانم فدای اون 🥺 ت بشم"} {
+	for i, txt := range []string{"آره بابا تو همیشه دیر میای", "ای جانم فدای اون 🥺 ت بشم", "آره بابا ولش کن"} {
 		_ = db.AddMessage(testChat, int64(100+i), &store.Message{UserID: testBotID, Name: "هوشنگ", Text: txt, Date: time.Now(), FromBot: true})
 	}
 	m := say(b, 200, sara, "هوشنگ دلم گرفته 🥺💕")
 	b.runReply(context.Background(), job{kind: jobReply, chatID: testChat, msg: m})
 	p := fake.Calls[0].Messages[1].Content
-	for _, want := range []string{"«ای جانم فدای»", "«آره بابا تو»", "don't use it now"} {
+	for _, want := range []string{"«آره بابا ولش»", "«آره بابا تو»", "don't use it now"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("missing %q:\n%s", want, p)
 		}
+	}
+	if repeatsOpening([]string{"«آره بابا تو»", "«ای جانم فدای»"}) {
+		t.Error("two different openings counted as a repeat")
 	}
 	if note := b.varietyNote(-999); note != "" {
 		t.Errorf("an empty chat got a note: %q", note)

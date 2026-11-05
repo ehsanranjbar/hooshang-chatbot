@@ -2,9 +2,9 @@ package store
 
 import (
 	"errors"
+	"github.com/ehsanranjbar/hooshang/internal/text"
 	"hash/fnv"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/ehsanranjbar/kvutil/kv"
@@ -23,33 +23,8 @@ type Term struct {
 	UsedAt  time.Time // last explained or shown to the model
 }
 
-// NormalizeTerm folds a term for matching: lowercase, ي→ی, ك→ک, ة→ه, no
-// tatweel, no diacritics, ZWNJ as a space, and runs of spaces collapsed.
-func NormalizeTerm(s string) string {
-	var b strings.Builder
-	space := false
-	for _, r := range strings.ToLower(s) {
-		switch {
-		case r == 'ي':
-			r = 'ی'
-		case r == 'ك':
-			r = 'ک'
-		case r == 'ة':
-			r = 'ه'
-		case r == 'ـ' || (r >= 'ً' && r <= 'ْ') || r == 'ٰ':
-			continue
-		case r == '‌' || r == '‏' || r == '‎' || r == ' ' || r == '\t' || r == '\n':
-			space = true
-			continue
-		}
-		if space && b.Len() > 0 {
-			b.WriteByte(' ')
-		}
-		space = false
-		b.WriteRune(r)
-	}
-	return b.String()
-}
+// NormalizeTerm folds a term for matching (text.Fold).
+func NormalizeTerm(s string) string { return text.Fold(s) }
 
 // termKey is the key of a normalized term: its 64-bit FNV hash.
 func termKey(chatID int64, norm string) Key {

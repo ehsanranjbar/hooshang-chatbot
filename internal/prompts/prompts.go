@@ -5,6 +5,7 @@ package prompts
 
 import (
 	"embed"
+	"github.com/ehsanranjbar/hooshang/internal/i18n"
 	"strings"
 	"text/template"
 	"time"
@@ -62,7 +63,34 @@ func GroupExtract(d GroupData) (string, error) {
 type SystemData struct {
 	Name     string
 	Language string
-	Now      string // formatted time (Asia/Tehran)
+	Now      string   // formatted time (Asia/Tehran)
+	Persona  string   // bot.persona.text: replaces the built-in identity paragraph when set
+	Notes    []string // bot.persona.notes: appended as extra lines
+	Mood     string   // the mood of the day, as a short English phrase (may be empty)
+}
+
+// Moods are the built-in moods a day is drawn from, as the phrase that
+// completes "Today you are …". A config mood that is not a key here is used
+// as the phrase itself.
+var Moods = map[string]string{
+	"normal":    "",
+	"sleepy":    "a bit sleepy and slow: shorter answers, less energy, you yawn at things",
+	"hyper":     "hyper and over-excited: quick, loud, more jokes than usual",
+	"grumpy":    "a bit grumpy: short-tempered, dry, easily annoyed, but still a friend",
+	"soft":      "in a soft, warm mood: kinder than usual, you notice when someone is down",
+	"nostalgic": "nostalgic: you bring up how things used to be and old group moments",
+}
+
+// DefaultMoods is the list a day's mood is drawn from when the config gives
+// none: normal most days.
+var DefaultMoods = []string{"normal", "normal", "normal", "normal", "sleepy", "hyper", "grumpy", "soft", "nostalgic"}
+
+// MoodPhrase returns the phrase for a mood name ("" for normal).
+func MoodPhrase(name string) string {
+	if p, ok := Moods[name]; ok {
+		return p
+	}
+	return name
 }
 
 // TaskData is the input of the reply and spontaneous task prompts.
@@ -78,6 +106,8 @@ type TaskData struct {
 	Task       string // the reply task (empty for spontaneous)
 	Mode       string // spontaneous mode (empty for replies)
 	Target     string // spontaneous/roast target name (may be empty)
+	Bubbles    int    // most chat bubbles the answer may be split into (0 or 1: no splitting)
+	Mentions   bool   // profiles carry @username/id: explain how to mention members
 }
 
 // ExtractData is the input of the memory extract prompt.
@@ -165,5 +195,6 @@ func FormatNow(t time.Time) string {
 	if err != nil {
 		loc = time.FixedZone("Tehran", 3*3600+30*60)
 	}
-	return t.In(loc).Format("2006-01-02 15:04")
+	t = t.In(loc)
+	return i18n.FormatDateTime(t) + " (" + t.Format("2006-01-02 15:04") + ")"
 }

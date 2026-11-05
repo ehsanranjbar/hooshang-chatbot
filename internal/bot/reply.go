@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -73,17 +74,12 @@ func (b *Bot) runReply(ctx context.Context, j job) {
 		return
 	}
 
-	// 7. Reserve extra chunks, then send.
-	chunks := chunkText(text, maxChunk)
+	// 7. Send it like a person: bubbles, typing time, mentions.
 	replyTo := 0
 	if j.kind == jobReply && j.msg != nil {
 		replyTo = j.msg.MessageID
 	}
-	if len(chunks) > 1 && !b.deps.Limiter.Reserve(j.chatID, len(chunks)-1) {
-		chunks = chunks[:1]
-		b.logger.Debug("reply truncated: rate limited on extra chunks", "chat", j.chatID)
-	}
-	_ = b.sendChunks(ctx, j.chatID, replyTo, chunks)
+	b.deliver(ctx, j, text, replyTo)
 }
 
 // replyRequest builds the LLM request of a reply job: the system prompt (plus
@@ -92,29 +88,28 @@ func (b *Bot) runReply(ctx context.Context, j job) {
 func (b *Bot) replyRequest(j job) (llm.Request, map[string]llm.ToolFunc) {
 	msgs := b.transcriptMessages(j)
 	transcript := b.formatTranscript(j, msgs)
-	sys, _ := prompts.System(prompts.SystemData{
-		Name:     b.deps.Cfg.Bot.Name,
-		Language: b.deps.Cfg.Bot.Language,
-		Now:      prompts.FormatNow(time.Now()),
-	})
+	sys := b.systemPrompt(j.chatID)
 	if j.authorID() > 0 && b.deps.Admins.IsAdmin(j.chatID, j.authorID()) {
 		sys += prompts.AdminRules(b.deps.Cfg.Features.Profiles.On()) // the edit_memory rules only with profiles
 	}
+	profiles := b.renderProfiles(j, msgs)
 	userMsg, _ := prompts.ReplyTask(prompts.TaskData{
 		Language:   b.deps.Cfg.Bot.Language,
 		Orders:     b.renderOrders(j, msgs),
-		Profiles:   b.renderProfiles(j, msgs),
+		Profiles:   profiles,
 		Group:      b.renderGroupMemory(j.chatID, j),
 		Glossary:   b.renderGlossary(j.chatID, transcript),
 		Transcript: transcript,
 		Task:       b.taskFor(j),
 		Variety:    b.varietyNote(j.chatID),
+		Bubbles:    b.deps.Cfg.Bot.Human.Bubbles,
+		Mentions:   profiles != "",
 	})
 	tools, handlers := b.toolsFor(j)
 	return llm.Request{
 		Model:       b.deps.Cfg.LLM.Model,
 		Messages:    []llm.Message{{Role: "system", Content: sys}, {Role: "user", Content: userMsg}},
-		Temperature: b.deps.Cfg.LLM.Temperature,
+		Temperature: b.moodTemperature(j.chatID),
 		MaxTokens:   b.deps.Cfg.LLM.MaxTokens,
 		Tools:       tools,
 	}, handlers
@@ -138,11 +133,7 @@ func (b *Bot) runSpontaneous(ctx context.Context, j job) {
 	transcript := b.formatTranscript(j, msgs)
 	profiles := b.renderProfiles(j, msgs)
 
-	sys, _ := prompts.System(prompts.SystemData{
-		Name:     b.deps.Cfg.Bot.Name,
-		Language: b.deps.Cfg.Bot.Language,
-		Now:      prompts.FormatNow(time.Now()),
-	})
+	sys := b.systemPrompt(j.chatID)
 	task, _ := prompts.SpontaneousTask(prompts.TaskData{
 		Language:   b.deps.Cfg.Bot.Language,
 		Orders:     b.renderOrders(j, msgs),
@@ -153,29 +144,38 @@ func (b *Bot) runSpontaneous(ctx context.Context, j job) {
 		Mode:       j.mode,
 		Target:     j.targetName,
 		Variety:    b.varietyNote(j.chatID),
+		Bubbles:    b.deps.Cfg.Bot.Human.Bubbles,
+		Mentions:   profiles != "",
 	})
 	req := llm.Request{
 		Model:       b.deps.Cfg.LLM.Model,
 		Messages:    []llm.Message{{Role: "system", Content: sys}, {Role: "user", Content: task}},
-		Temperature: b.deps.Cfg.LLM.Temperature,
+		Temperature: b.moodTemperature(j.chatID),
 		MaxTokens:   b.deps.Cfg.LLM.MaxTokens,
 	}
-	resp, err := b.deps.LLM.Chat(ctx, req)
+	var resp llm.Response
+	var err error
+	if j.mode == "sticker" { // the sticker mode answers with the media tools only
+		req.Tools = mediaTools()
+		handlers := map[string]llm.ToolFunc{"find_media": b.toolFindMedia(j), "send_media": b.toolSendMedia(j)}
+		resp, err = llm.RunTools(ctx, b.deps.LLM, req, handlers, 2)
+	} else {
+		resp, err = b.deps.LLM.Chat(ctx, req)
+	}
 	if err != nil {
 		b.logger.Warn("spontaneous llm failed", "chat", j.chatID, "err", err)
 		return
+	}
+	if j.mode == "sticker" {
+		return // the sticker (if any) was sent by the tool; no words
 	}
 	content, _ := splitReactionMarkers(resp.Content)
 	text := cleanReply(content, b.deps.Cfg.Bot.Name)
 	if text == "" {
 		return // the model said "-" or produced nothing
 	}
-	chunks := chunkText(text, maxChunk)
-	if len(chunks) > 1 && !b.deps.Limiter.Reserve(j.chatID, len(chunks)-1) {
-		chunks = chunks[:1]
-	}
 	// Spontaneous messages are not replies.
-	_ = b.sendChunks(ctx, j.chatID, 0, chunks)
+	b.deliver(ctx, j, text, 0)
 }
 
 // authorID returns the triggering message's author id, or 0.
@@ -365,7 +365,7 @@ func (b *Bot) renderProfiles(j job, msgs []store.Message) string {
 		if r == "" {
 			continue
 		}
-		part := displayName(mem) + ":\n" + r
+		part := displayName(mem) + " (" + handleOf(mem) + "):\n" + r
 		if i >= len(must) && used+len([]rune(part)) > budget {
 			continue // a smaller profile further down may still fit
 		}
@@ -373,6 +373,16 @@ func (b *Bot) renderProfiles(j job, msgs []store.Message) string {
 		parts = append(parts, part)
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+// handleOf is how a member is addressed in a mention: "@username · id N", or
+// "id N" when they have no username.
+func handleOf(m *store.Member) string {
+	id := "id " + strconv.FormatInt(m.UserID(), 10)
+	if m.Username != "" {
+		return "@" + m.Username + " · " + id
+	}
+	return id
 }
 
 // aboutIDs returns the members the triggering message is about: the replied-to
@@ -525,13 +535,30 @@ func (b *Bot) varietyNote(chatID int64) string {
 		}
 	}
 	var notes []string
-	if len(openings) > 0 {
+	if repeatsOpening(openings) {
 		notes = append(notes, "Your last messages began with "+strings.Join(openings, ", ")+": start differently and don't reuse their phrases.")
 	}
 	if sweet > 0 {
 		notes = append(notes, "You used the mock-sweet style recently: don't use it now (no «جانم», «فدای», «قربون», «عزیزم»).")
 	}
 	return strings.Join(notes, " ")
+}
+
+// repeatsOpening reports whether two of the openings start with the same word,
+// which is when the model is latching onto a phrase.
+func repeatsOpening(openings []string) bool {
+	seen := map[string]bool{}
+	for _, o := range openings {
+		f := strings.Fields(strings.Trim(o, "«»"))
+		if len(f) == 0 {
+			continue
+		}
+		if seen[f[0]] {
+			return true
+		}
+		seen[f[0]] = true
+	}
+	return false
 }
 
 // groupWords show a message asks about the group itself.

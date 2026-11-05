@@ -33,6 +33,29 @@ type Features struct {
 	Poem        *PoemFeature        `yaml:"poem"`         // /poem and the random_poem tool
 	Roast       *RoastFeature       `yaml:"roast"`        // /roast
 	Voice       *VoiceFeature       `yaml:"voice"`        // transcribing voice messages
+	Greetings   *GreetingsFeature   `yaml:"greetings"`    // answering صبح/شب بخیر, welcoming and seeing off members
+}
+
+// GreetingsFeature is features.greetings: the bot sometimes answers a
+// member's «صبح بخیر» / «شب بخیر», welcomes new members and comments when
+// someone leaves.
+type GreetingsFeature struct {
+	Enabled        bool          `yaml:"enabled"`
+	Chance         float64       `yaml:"chance"`          // chance of answering a greeting, [0,1]; default 0.6
+	MemberCooldown time.Duration `yaml:"member_cooldown"` // don't greet the same member again within; default 12h
+	ChatCooldown   time.Duration `yaml:"chat_cooldown"`   // don't greet anyone in the chat again within; default 30m
+	Welcome        bool          `yaml:"welcome"`         // greet new members; default true
+	Farewell       bool          `yaml:"farewell"`        // comment when a member leaves; default true
+}
+
+// On reports whether the feature is on: its section is present and not disabled.
+func (f *GreetingsFeature) On() bool { return f != nil && f.Enabled }
+
+// UnmarshalYAML fills the defaults, then the keys of the section.
+func (f *GreetingsFeature) UnmarshalYAML(n *yaml.Node) error {
+	type plain GreetingsFeature
+	*f = GreetingsFeature{Enabled: true, Chance: 0.6, MemberCooldown: 12 * time.Hour, ChatCooldown: 30 * time.Minute, Welcome: true, Farewell: true}
+	return decodeFeature(n, "greetings", (*plain)(f))
 }
 
 // ProfilesFeature is features.profiles: what the bot remembers about each member.
@@ -312,7 +335,7 @@ func (f Features) Active() []string {
 	}{
 		{"profiles", f.Profiles.On()}, {"group_memory", f.GroupMemory.On()}, {"glossary", f.Glossary.On()},
 		{"media", f.Media.On()}, {"faal", f.Faal.On()}, {"poem", f.Poem.On()},
-		{"roast", f.Roast.On()}, {"voice", f.Voice.On()},
+		{"roast", f.Roast.On()}, {"voice", f.Voice.On()}, {"greetings", f.Greetings.On()},
 	} {
 		if e.on {
 			on = append(on, e.name)
@@ -342,6 +365,9 @@ func (f *Features) validate() error {
 	}
 	if g := f.Glossary; g.On() && (g.MaxItems < 1 || g.InPrompt < 1) {
 		return fmt.Errorf("features.glossary: max_items and in_prompt must be >= 1")
+	}
+	if g := f.Greetings; g.On() && (g.Chance < 0 || g.Chance > 1 || g.MemberCooldown < 0 || g.ChatCooldown < 0) {
+		return fmt.Errorf("features.greetings: chance must be in [0, 1] and the cooldowns >= 0")
 	}
 	if m := f.Media; m.On() {
 		if m.Words < 5 || m.Words > 200 || m.CacheTTL <= 0 || m.MaxQueue < 1 {
