@@ -40,16 +40,37 @@ func countStyle(s *store.Style, text string, replyTo int64, at time.Time) {
 			s.ReplyTo = map[int64]int{}
 		}
 		s.ReplyTo[replyTo]++
-		for len(s.ReplyTo) > 10 { // keep the ten most replied-to
-			var least int64
-			n := int(^uint(0) >> 1)
-			for id, c := range s.ReplyTo {
-				if c < n {
-					least, n = id, c
-				}
+		keepTop(s.ReplyTo, 10)
+	}
+}
+
+// maxStyleMedia is how many distinct stickers/GIFs a member's style keeps.
+const maxStyleMedia = 30
+
+// countMedia folds a sticker or GIF a member sent (by file_unique_id) into
+// their style stats, so «استیکر مورد علاقه‌ی فلانی» has an answer.
+func countMedia(s *store.Style, uniqueID string) {
+	if uniqueID == "" {
+		return
+	}
+	if s.Media == nil {
+		s.Media = map[string]int{}
+	}
+	s.Media[uniqueID]++
+	keepTop(s.Media, maxStyleMedia)
+}
+
+// keepTop drops the least counted keys until at most n remain.
+func keepTop[K comparable](m map[K]int, n int) {
+	for len(m) > n {
+		var least K
+		min := int(^uint(0) >> 1)
+		for k, c := range m {
+			if c < min {
+				least, min = k, c
 			}
-			delete(s.ReplyTo, least)
 		}
+		delete(m, least)
 	}
 }
 

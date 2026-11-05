@@ -33,6 +33,7 @@ func RenderItems(m store.Memory, items []store.Item, now time.Time) string {
 	}
 	write(Title("nickname"), strings.TrimSpace(m.Nickname))
 	write(Title("summary"), strings.TrimSpace(m.Summary))
+	write(Title("analysis"), strings.TrimSpace(m.Analysis))
 	for _, kind := range RenderKinds {
 		var parts []string
 		for _, it := range items {
@@ -157,6 +158,16 @@ func RenderStyle(s store.Style, names map[int64]string) string {
 		parts = append(parts, fmt.Sprintf(i18n.StyleTalksTo, names[who]))
 	}
 	return strings.Join(parts, "، ")
+}
+
+// sortByCount orders keys by their count, highest first (ties by key).
+func sortByCount(keys []string, counts map[string]int) {
+	sort.Slice(keys, func(i, j int) bool {
+		if counts[keys[i]] != counts[keys[j]] {
+			return counts[keys[i]] > counts[keys[j]]
+		}
+		return keys[i] < keys[j]
+	})
 }
 
 // topKey returns the key with the highest count ("" when empty).

@@ -97,6 +97,10 @@ features:
       photos: 2                          # profile photos described by the vision model into "look" items (0 = off)
       bio: true                          # the bio and birthday, when Telegram exposes them
       refresh: 720h
+    analysis:                            # the model's own read of each member (temperament, humour, sensitivities, how to talk to them), shown with their profile
+      every: 60                          # rewrite it after this many more of their messages (0 = off)
+      min_msgs: 30                       # messages a member must have before the first one
+      max_words: 150
 
   # Group memory: the topics and events the group cared about most (by reactions
   # and replies). Reactions are only delivered while the bot is a group admin.
@@ -163,7 +167,7 @@ features:
   rag:
     archive_ttl: 4320h                   # keep archived messages for 180 days
     top_k: 5                             # older messages shown in a reply at most
-    min_score: 0.55                      # least cosine similarity to count as relevant (bge-m3: related ≈ 0.8, unrelated ≈ 0.45)
+    min_score: 0.63                      # least cosine similarity to count as relevant (bge-m3 on short Persian chat: related ≥ 0.67, noise ≈ 0.55–0.60)
     decay_days: 30                       # half-life of the recency bonus
     batch: 16                            # texts per embedding call
     max_queue: 500                       # pending embeddings

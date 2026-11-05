@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"github.com/mymmrac/telego"
 	"strings"
 	"testing"
 	"time"
@@ -51,6 +52,28 @@ func TestArchiveAndRelatedMessages(t *testing.T) {
 	}
 	if strings.Count(p, "ماشینمو فروختم، پراید سفید بود") != 1 {
 		t.Errorf("the archived line should appear once:\n%s", p)
+	}
+	// A short trigger or a greeting is not worth a retrieval, unless it
+	// replies to a message that says enough.
+	for _, c := range []struct {
+		text, reply string
+		want        bool
+	}{
+		{"هوشنگ یادته ماشینمو فروختم؟ پراید سفید", "", true},
+		{"هوشنگ؟", "", false},
+		{"شب بخیر هوشنگ جان، خوب بخوابی", "", false},
+		{"هوشنگ؟", "ماشینمو فروختم، پراید سفید بود و خیلی دوستش داشتم", true},
+	} {
+		tm := &telego.Message{Text: c.text}
+		if c.reply != "" {
+			tm.ReplyToMessage = &telego.Message{Text: c.reply}
+		}
+		if got := worthRetrieving(&job{msg: tm}); got != c.want {
+			t.Errorf("worthRetrieving(%q, reply %q) = %v", c.text, c.reply, got)
+		}
+	}
+	if !worthRetrieving(&job{}) {
+		t.Error("a spontaneous job should retrieve")
 	}
 	// Short lines and commands are not archived.
 	say(b, 10, ali, "/faal")

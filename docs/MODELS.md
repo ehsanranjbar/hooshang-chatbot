@@ -234,4 +234,4 @@ the latencies won't be comparable. The scenarios are in `internal/bot/lmstudio_t
 `text-embedding-bge-m3` in LM Studio next to the 31B: 1024 dimensions, three Persian texts in
 0.4 s. Cosine between «ماشینمو فروختم، پراید سفید بود» and «یادته ماشینتو فروختی؟ همون پراید» is
 0.79; between the first and «امروز هوا خیلی خوبه بریم بیرون» 0.47. bge-m3 scores run high, so
-`features.rag.min_score` defaults to 0.55.
+`features.rag.min_score` defaults to 0.63: on a live group, short unrelated lines scored 0.55–0.60 against each other while real matches (an earlier lesson answering a later question) scored 0.67–0.69.

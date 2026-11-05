@@ -60,6 +60,15 @@ type Memory struct {
 	Suppressed     []string // removed by the admin: the extractor must not add these again
 	NextID         uint64   // the next item id (UpdateMemory assigns ids to items with ID 0)
 	UpdatedAt      time.Time
+
+	// Analysis is the model's own read of a member (temperament, humour,
+	// sensitivities, role in the group, how to talk to them), written from
+	// everything above plus their messages and stickers; AnalysisMsgs is the
+	// member's Style.Msgs when it was written, so it is redone after enough
+	// new messages.
+	Analysis     string
+	AnalysisAt   time.Time
+	AnalysisMsgs int
 }
 
 // Kind returns the items of a kind, in stored order.
@@ -250,4 +259,5 @@ type Style struct {
 	Laughs  map[string]int // laugh forms seen ("خخخ", "😂", "هاها", …)
 	Hours   [24]int        // messages per hour of the day
 	ReplyTo map[int64]int  // who they reply to most (user id → count, at most 10 kept)
+	Media   map[string]int // stickers and GIFs they send (file_unique_id → count, at most 30 kept)
 }

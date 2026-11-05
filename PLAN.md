@@ -348,9 +348,22 @@ returns stances, jokes and promises; rendered into the tasks as "What you yourse
 `UpdateGroupNow`: see §6a; it also refreshes the `sample` items (`features.profiles.style_samples`).
 
 **Style (`store.Style`, `bot.countStyle`)**: counted per member on every message, no model: messages,
-words, messages with an emoji, laugh forms, messages per hour (Tehran), who they reply to (10 kept).
+words, messages with an emoji, laugh forms, messages per hour (Tehran), who they reply to (10 kept),
+which stickers/GIFs they send (`Media`, 30 kept; behind `find_media({member})`).
 `RenderStyle` makes one Persian line («پیام‌های کوتاه، پر از ایموجی، شب‌فعال، می‌خنده با خخخ، بیشتر
 با علی حرف می‌زنه») after 20 messages; it is appended to the member's profile in prompts.
+
+**Analysis (`memory/analysis.go`, `features.profiles.analysis`)**: the model's own read of a member,
+written in Persian from everything known — the rendered memory, the style line, their three most-sent
+stickers (descriptions) and up to 60 of their own messages (the archive when RAG is on, else the
+recent messages) — plus the previous analysis to revise. Covers temperament, humour and how they take
+jokes, what they are proud of or touchy about, their role and closeness to others, how they argue and
+show affection, what lands and what to avoid, how to talk to them; grounded in the material, guesses
+marked, no clinical labels or excluded topics, `max_words` (150). Stored on `Memory`
+(`Analysis`, `AnalysisAt`, `AnalysisMsgs`) and run at the end of a member update once they have
+`min_msgs` (30) messages and again after `every` (60) more. Rendered as «تحلیل: …» after the summary,
+so it reaches the reply prompt (which says to let it shape tone and jokes but never quote it), `/me`
+and `get_memory`; `/forgetme` deletes it with the memory.
 
 **Telegram seed (`bot/seed.go`, `features.profiles.seed`)**: a member's first message (or one after
 `refresh`) queues, on the describer's queue, a read of their profile: up to `photos` profile photos
@@ -639,6 +652,8 @@ transcript shows them: `[استیکر: 😂 — گربه‌ای که از خند
 - **Stickers and GIFs:** the shared media cache also keeps `UniqueID`, `Kind`, the `FileID` to send,
   `Emoji` and `Uses` (a member sending it again refreshes it). `find_media({query, kind})` searches
   by emoji (exact sticker emoji scores 3) or words in the description, then most used;
+  `find_media({member})` lists what one member sends most (`Style.Media`, see §3.6) so
+  «استیکر مورد علاقه فلانی» works;
   `send_media({id})` sends it as a reply (1 limiter slot) and records it in the transcript as
   `[استیکر: 😂 — description]`. Photos are never offered.
 - **Backlog:** messages older than 2 minutes (Telegram redelivers up to 24h after downtime) are
@@ -799,7 +814,7 @@ term, `Note` = the meaning, `By` = who taught it).
   embedding model wipes the vectors (`meta["embedding"]`).
 - **Retrieval in a reply (`replyTask`):** one query vector per job (the trigger text plus the message
   it replies to; a spontaneous job uses the last 3 human lines). `relatedMessages`: top `top_k` (5)
-  archived messages not in the transcript with cosine ≥ `min_score` (0.45), scored
+  archived messages not in the transcript with cosine ≥ `min_score` (0.63), scored
   `cos × (0.7 + 0.3·2^(−age/decay_days))`, rendered as "Older messages that may be relevant" with
   Persian dates. `selectItems`: when a member's memory is bigger than a third of `profile_budget`,
   every locked item, order, boundary and week-old episode is kept and the rest is ranked by cosine

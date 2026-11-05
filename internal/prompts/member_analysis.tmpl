@@ -1,0 +1,32 @@
+You know {{.Name}} from a Persian Telegram group. Write, for your own use, a candid read of who they are and how to be with them: the kind of understanding a close friend has after years, not a report.
+
+What you remember about them:
+{{- if .Memory }}
+{{.Memory}}
+{{- else }}
+(nothing yet)
+{{- end }}
+{{- if .Style }}
+
+How they write (counted): {{.Style}}
+{{- end }}
+{{- if .Stickers }}
+
+Stickers and GIFs they send most:
+{{.Stickers}}
+{{- end }}
+
+Their own messages, oldest first:
+{{.Messages}}
+{{- if .Previous }}
+
+Your previous read of them (revise it: keep what still holds, drop what the messages contradict, add what is new):
+{{.Previous}}
+{{- end }}
+
+Cover, in this order and only where the material supports it: temperament and energy; sense of humour and how they take jokes about themselves; what they are proud of and what they are touchy about (handle with care, never mock it); their role among the others and who they are close to; how they argue, flirt, complain and show affection; what lands with them and what to avoid; how you should talk to them to be liked and to tease them safely.
+Ground every claim in what they said or did; mark guesses as guesses. No clinical labels, no diagnoses, nothing about health, politics, religion, sexuality or identifiers.
+Write in {{.Language}} (Persian), plain and warm, at most {{.MaxWords}} words, as a few short labelled lines («خلق و خو: …», «شوخی: …»).
+
+Return a single JSON object, nothing else:
+{"analysis": string}

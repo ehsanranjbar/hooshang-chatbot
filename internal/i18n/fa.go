@@ -147,6 +147,7 @@ var (
 var KindTitles = map[string]string{
 	"nickname":     "لقب",
 	"summary":      "خلاصه",
+	"analysis":     "تحلیل",
 	"fact":         "دانسته‌ها",
 	"interest":     "علاقه‌مندی‌ها",
 	"quirk":        "عادت‌ها",

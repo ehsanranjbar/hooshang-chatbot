@@ -20,7 +20,9 @@ What it does:
   dated episodes («فردا امتحان داره», they expire), stances, running jokes, and what their profile
   photos look like. Each item carries how often it was seen; once-seen items fade, repeated ones
   become durable. The bot also counts how each member writes (length, emoji, laugh form, hours, who
-  they reply to) and remembers its own stances, jokes and promises so it stays consistent. The admin
+  they reply to), and once it knows someone well enough writes its own read of them (temperament,
+  humour, what they are touchy about, how to talk to them), revised as they keep talking, which
+  shapes its tone with them. It remembers its own stances, jokes and promises so it stays consistent. The admin
   edits memory in plain language («هوشنگ، علی دیگه تهران نیست، رفته شیراز») and gives standing
   orders («با سارا شوخی نکن»). New members are seeded from their Telegram profile (photos, bio).
 - **Remembers the group:** the most-reacted topics and events of the week, scored by reactions and
@@ -31,7 +33,7 @@ What it does:
   its relevant items, and stickers and terms are also found by meaning.
 - **Sees media:** photos, stickers and GIFs are described by the (vision) model and appear in the
   conversation it reads; a question about a picture gets the picture itself. It can answer with a
-  sticker or GIF the group has used.
+  sticker or GIF the group has used, including someone's favourite one («استیکر مورد علاقه‌ی سارا رو بفرست»).
 - **Hears voice messages:** voice messages and video notes are transcribed locally with
   [whisper.cpp](https://github.com/ggml-org/whisper.cpp) and the text appears in the conversation
   («[ویس: …]»). A voice that says the bot's name, or replies to it, is answered.

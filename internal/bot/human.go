@@ -98,8 +98,13 @@ func quiet(now time.Time, from, to int) bool {
 	return m >= from || m < to
 }
 
-// splitBubbles splits a reply into chat bubbles on lines that are only ---
-// (what the task lets the model write), at most max, dropping empty ones.
+// bubbleSep is the separator the task lets the model write between bubbles,
+// --- (or ***), meant on its own line but accepted anywhere between
+// whitespace, as the model often tacks it onto the end of a sentence.
+var bubbleSep = regexp.MustCompile(`(^|\s)(-{3,}|\*{3,})(\s|$)`)
+
+// splitBubbles splits a reply into chat bubbles on --- separators (and lines
+// that are only an em dash), at most max, dropping empty ones.
 func splitBubbles(text string, max int) []string {
 	if max < 1 {
 		max = 1
@@ -112,8 +117,9 @@ func splitBubbles(text string, max int) []string {
 		}
 		cur = nil
 	}
+	text = bubbleSep.ReplaceAllString(text, "\n---\n")
 	for _, line := range strings.Split(text, "\n") {
-		if t := strings.TrimSpace(line); t == "---" || t == "—" || t == "***" {
+		if t := strings.TrimSpace(line); t == "---" || t == "—" {
 			flush()
 			continue
 		}

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mymmrac/telego"
 
@@ -386,7 +387,7 @@ func (b *Bot) queryVector(ctx context.Context, j *job, msgs []store.Message) (ra
 // that are not already in the transcript, with their Persian dates.
 func (b *Bot) relatedMessages(ctx context.Context, j *job, msgs []store.Message) string {
 	r := b.deps.Cfg.Features.RAG
-	if b.embedder == nil || r.TopK <= 0 {
+	if b.embedder == nil || r.TopK <= 0 || !worthRetrieving(j) {
 		return ""
 	}
 	q, ok := b.queryVector(ctx, j, msgs)
@@ -410,6 +411,7 @@ func (b *Bot) relatedMessages(ctx context.Context, j *job, msgs []store.Message)
 			return s * rag.Decay(now.Sub(a.Date), half)
 		})
 	var lines []string
+	var scores []string
 	seen := map[string]bool{}
 	for _, h := range hits {
 		a, err := b.deps.DB.GetArchived(j.chatID, h.ID)
@@ -418,8 +420,34 @@ func (b *Bot) relatedMessages(ctx context.Context, j *job, msgs []store.Message)
 		}
 		seen[a.Text] = true
 		lines = append(lines, fmt.Sprintf("- (%s) %s: %s", i18n.When(a.Date, now), a.Name, a.Text))
+		scores = append(scores, fmt.Sprintf("%d:%.2f", h.ID, h.Score))
+	}
+	if len(lines) > 0 {
+		b.logger.Debug("related messages", "chat", j.chatID, "hits", strings.Join(scores, " "))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// minQueryRunes is the shortest trigger worth a retrieval: shorter texts
+// («باش», «شب بخیر») embed close to everything and only pull in noise.
+const minQueryRunes = 12
+
+// worthRetrieving reports whether a job's trigger says enough to look for
+// older messages: spontaneous jobs always do (their query is the recent
+// chatter); a reply does unless its trigger is a greeting or too short, in
+// which case the replied-to message has to carry it.
+func worthRetrieving(j *job) bool {
+	if j.msg == nil {
+		return true
+	}
+	t := j.msg.Text
+	if t == "" {
+		t = j.msg.Caption
+	}
+	if r := j.msg.ReplyToMessage; r != nil && utf8.RuneCountInString(strings.TrimSpace(r.Text)) >= minQueryRunes {
+		return true
+	}
+	return utf8.RuneCountInString(strings.TrimSpace(t)) >= minQueryRunes && greetingKind(t) == ""
 }
 
 // selectItems picks the items of a member's memory worth their share of the

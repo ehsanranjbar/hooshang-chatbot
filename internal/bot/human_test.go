@@ -29,6 +29,22 @@ func TestSplitBubbles(t *testing.T) {
 	if got := splitBubbles("---\n\n---", 3); got != nil {
 		t.Fatalf("empty: %q", got)
 	}
+	// The model often puts the separator at the end of a sentence or inline.
+	for _, in := range []string{
+		"ببین صالح، احسان فقط تو تخیلاتش سازنده منه. ---\nواقعیت اینه که داره وقتشو تلف میکنه.",
+		"ببین صالح، احسان فقط تو تخیلاتش سازنده منه. --- واقعیت اینه که داره وقتشو تلف میکنه.",
+		"ببین صالح، احسان فقط تو تخیلاتش سازنده منه.\n--- واقعیت اینه که داره وقتشو تلف میکنه.",
+		"ببین صالح، احسان فقط تو تخیلاتش سازنده منه. ----\n\nواقعیت اینه که داره وقتشو تلف میکنه.",
+	} {
+		got := splitBubbles(in, 3)
+		if len(got) != 2 || got[0] != "ببین صالح، احسان فقط تو تخیلاتش سازنده منه." || got[1] != "واقعیت اینه که داره وقتشو تلف میکنه." {
+			t.Errorf("inline separator %q: %q", in, got)
+		}
+	}
+	// Dashes inside a word or a number range are not a separator.
+	if got := splitBubbles("ساعت ۸---۹ یا pre---post؟", 3); len(got) != 1 {
+		t.Errorf("dashes inside text split: %q", got)
+	}
 }
 
 func TestReplyIsSentAsBubbles(t *testing.T) {

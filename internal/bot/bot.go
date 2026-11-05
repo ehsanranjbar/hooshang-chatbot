@@ -363,6 +363,10 @@ func (b *Bot) storeIncoming(m *telego.Message, text string) {
 		ReplyToUserID: replyUserID(m),
 		Date:          time.Unix(m.Date, 0),
 	})
+	mediaID := ""
+	if ref, ok := b.mediaRefOf(m); ok && ref.cache {
+		mediaID = ref.uniqueID
+	}
 	known, _ := b.deps.DB.GetMember(chatID, m.From.ID)
 	_, _ = b.deps.DB.UpdateMember(chatID, m.From.ID, func(mem *store.Member) {
 		mem.FirstName = m.From.FirstName
@@ -373,6 +377,7 @@ func (b *Bot) storeIncoming(m *telego.Message, text string) {
 		mem.LastSeen = time.Unix(m.Date, 0)
 		mem.MsgsSinceUpdate++
 		countStyle(&mem.Style, text, replyUserID(m), time.Unix(m.Date, 0).In(tehran))
+		countMedia(&mem.Style, mediaID)
 	})
 	b.maybeSeed(m.Chat.ID, *m.From, known)
 	b.archive(chatID, m, text)

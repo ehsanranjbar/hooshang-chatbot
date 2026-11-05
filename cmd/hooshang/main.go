@@ -137,6 +137,7 @@ func newUpdater(cfg *config.Config, db *store.DB, client llm.Client, botID int64
 	}
 	if p := f.Profiles; p.On() {
 		uc.ContextMessages, uc.MaxItems = p.ContextMessages, p.MaxItems
+		uc.Analysis = memory.AnalysisConfig{Every: p.Analysis.Every, MinMsgs: p.Analysis.MinMsgs, MaxWords: p.Analysis.MaxWords}
 		if p.SelfEvery > 0 {
 			uc.BotID = botID
 		}

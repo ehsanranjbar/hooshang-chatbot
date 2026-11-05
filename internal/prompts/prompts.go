@@ -25,6 +25,7 @@ var (
 	mediaDescribeTmpl = template.Must(template.ParseFS(fs, "media_describe.tmpl"))
 	reactionTmpl      = template.Must(template.ParseFS(fs, "reaction_task.tmpl"))
 	selfExtractTmpl   = template.Must(template.ParseFS(fs, "self_extract.tmpl"))
+	analysisTmpl      = template.Must(template.ParseFS(fs, "member_analysis.tmpl"))
 )
 
 // SelfExtract renders the bot's self-memory extraction prompt (Items, Kinds,
@@ -130,6 +131,24 @@ type ExtractData struct {
 	Items      string // the current items, one "kind: text" per line (may be empty)
 	Kinds      string // the kinds the model may return, comma-separated
 	Transcript string // recent messages, the target's lines marked with >>
+}
+
+// AnalysisData is the input of the member analysis prompt: everything known
+// about one member, for the model's own read of them.
+type AnalysisData struct {
+	Language string
+	Name     string
+	Memory   string // the rendered memory (nickname, summary, items by kind)
+	Style    string // the counted style line (may be empty)
+	Stickers string // their most-sent stickers, one description per line (may be empty)
+	Messages string // their own messages, oldest first, one "(date) text" per line
+	Previous string // the previous analysis (may be empty)
+	MaxWords int
+}
+
+// MemberAnalysis renders the member analysis prompt.
+func MemberAnalysis(d AnalysisData) (string, error) {
+	return exec(analysisTmpl, d)
 }
 
 // FaalData is the input of the faal interpretation prompt.

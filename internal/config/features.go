@@ -46,7 +46,7 @@ type RAGFeature struct {
 	Enabled    bool          `yaml:"enabled"`
 	ArchiveTTL time.Duration `yaml:"archive_ttl"`  // how long archived messages are kept; default 4320h (180 days)
 	TopK       int           `yaml:"top_k"`        // older messages shown in a reply at most; default 5
-	MinScore   float64       `yaml:"min_score"`    // least cosine to count as relevant; default 0.45
+	MinScore   float64       `yaml:"min_score"`    // least cosine to count as relevant; default 0.63
 	DecayDays  int           `yaml:"decay_days"`   // half-life of the recency bonus; default 30
 	Batch      int           `yaml:"batch"`        // texts per embedding call; default 16
 	MaxQueue   int           `yaml:"max_queue"`    // pending embeddings; more wait for the next flush; default 500
@@ -59,7 +59,7 @@ func (f *RAGFeature) On() bool { return f != nil && f.Enabled }
 // UnmarshalYAML fills the defaults, then the keys of the section.
 func (f *RAGFeature) UnmarshalYAML(n *yaml.Node) error {
 	type plain RAGFeature
-	*f = RAGFeature{Enabled: true, ArchiveTTL: 180 * 24 * time.Hour, TopK: 5, MinScore: 0.55, DecayDays: 30, Batch: 16, MaxQueue: 500, MaxPerChat: 50000}
+	*f = RAGFeature{Enabled: true, ArchiveTTL: 180 * 24 * time.Hour, TopK: 5, MinScore: 0.63, DecayDays: 30, Batch: 16, MaxQueue: 500, MaxPerChat: 50000}
 	return decodeFeature(n, "rag", (*plain)(f))
 }
 
@@ -99,6 +99,11 @@ type ProfilesFeature struct {
 		Bio     bool          `yaml:"bio"`     // read the bio and birthday when Telegram exposes them; default true
 		Refresh time.Duration `yaml:"refresh"` // re-read the Telegram profile after; default 720h
 	} `yaml:"seed"`
+	Analysis struct {
+		Every    int `yaml:"every"`     // rewrite the model's analysis of a member after N more of their messages; default 60; 0 = off
+		MinMsgs  int `yaml:"min_msgs"`  // messages a member must have before the first analysis; default 30
+		MaxWords int `yaml:"max_words"` // length of the analysis; default 150
+	} `yaml:"analysis"`
 }
 
 // GroupMemoryFeature is features.group_memory: the events the group cared about.
@@ -217,6 +222,7 @@ func (f *ModerationFeature) UnmarshalYAML(n *yaml.Node) error {
 func (f *ProfilesFeature) UnmarshalYAML(n *yaml.Node) error {
 	type plain ProfilesFeature // no methods: decoding into f itself would recurse
 	*f = ProfilesFeature{Enabled: true, UpdateEvery: 15, MaxAge: 24 * time.Hour, ContextMessages: 150, MaxItems: 10, SelfEvery: 20, StyleSamples: 12}
+	f.Analysis.Every, f.Analysis.MinMsgs, f.Analysis.MaxWords = 60, 30, 150
 	f.Seed.Photos, f.Seed.Bio, f.Seed.Refresh = 2, true, 30*24*time.Hour
 	return decodeFeature(n, "profiles", (*plain)(f))
 }
@@ -421,6 +427,9 @@ func (f *Features) validate() error {
 		}
 		if p.SelfEvery < 0 || p.StyleSamples < 0 || p.Seed.Photos < 0 || p.Seed.Photos > 10 || p.Seed.Refresh < 0 {
 			return fmt.Errorf("features.profiles: self_every and style_samples >= 0, seed.photos in [0, 10], seed.refresh >= 0")
+		}
+		if a := p.Analysis; a.Every < 0 || a.MinMsgs < 1 || a.MaxWords < 20 {
+			return fmt.Errorf("features.profiles.analysis: every >= 0, min_msgs >= 1, max_words >= 20")
 		}
 	}
 	if g := f.GroupMemory; g.On() && (g.TTL <= 0 || g.MaxItems < 1 || g.UpdateEvery < 1 || g.InPrompt < 0 || g.PromptChance < 0 || g.PromptChance > 1) {

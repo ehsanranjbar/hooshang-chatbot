@@ -72,6 +72,38 @@ func (d *DB) GetArchived(chatID, msgID int64) (*Archived, error) {
 	return out, err
 }
 
+// ArchivedBy returns a member's newest archived messages, up to n, oldest first.
+func (d *DB) ArchivedBy(chatID, userID int64, n int) ([]Archived, error) {
+	var out []Archived
+	err := d.db.View(func(tx kv.Tx) error {
+		arch := d.archive.Instantiate(tx)
+		it, err := d.archiveByUser.Instantiate(tx).ReverseIterator(kvutil.Between(K3(chatID, userID, math.MinInt64), K3(chatID, userID, math.MaxInt64)))
+		if err != nil {
+			return err
+		}
+		defer it.Close()
+		for ; it.Valid() && len(out) < n; it.Next() {
+			k, err := it.Key()
+			if err != nil {
+				return err
+			}
+			a, err := arch.Get(K(chatID, k.Second.Second))
+			if errors.Is(err, kv.ErrNotFound) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			out = append(out, *a)
+		}
+		return nil
+	})
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out, err
+}
+
 // PutMsgVector stores a message's vector for ttl.
 func (d *DB) PutMsgVector(chatID, msgID int64, v rag.Vector, ttl time.Duration) error {
 	return d.db.Update(func(tx kv.Tx) error { return setTTL(d.msgVectors.Instantiate(tx), K(chatID, msgID), &v, ttl) })

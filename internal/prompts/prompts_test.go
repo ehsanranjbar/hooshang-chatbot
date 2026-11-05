@@ -179,3 +179,19 @@ func TestGroupExtractRenders(t *testing.T) {
 		t.Errorf("no events: %s", empty)
 	}
 }
+
+func TestMemberAnalysisRenders(t *testing.T) {
+	out, err := MemberAnalysis(AnalysisData{Language: "fa", Name: "Ali", Memory: "دانسته‌ها: برنامه‌نویس", Style: "پیام‌های کوتاه", Stickers: "- 😂 گربه (×4)", Messages: "(امروز) سلام", Previous: "قبلی", MaxWords: 120})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Ali", "برنامه‌نویس", "پیام‌های کوتاه", "گربه", "(امروز) سلام", "Your previous read", "قبلی", "120 words", `{"analysis": string}`, "No clinical labels"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("analysis prompt missing %q:\n%s", want, out)
+		}
+	}
+	bare, _ := MemberAnalysis(AnalysisData{Language: "fa", Name: "x", Messages: "m", MaxWords: 50})
+	if strings.Contains(bare, "previous read") || strings.Contains(bare, "Stickers") || !strings.Contains(bare, "(nothing yet)") {
+		t.Errorf("empty sections rendered:\n%s", bare)
+	}
+}

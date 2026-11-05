@@ -24,6 +24,7 @@ type UpdaterConfig struct {
 	JSONSchema      bool
 	BotID           int64 // the bot's user id: the self entity
 	Group           GroupConfig
+	Analysis        AnalysisConfig
 	// Embed, when set, is told about new or changed items so they can be
 	// embedded for retrieval (RAG). It must not block.
 	Embed func(chatID, entity int64, items []store.Item)
@@ -239,11 +240,19 @@ func (u *Updater) UpdateNow(ctx context.Context, chatID, userID int64) error {
 		return err
 	}
 	u.embed(chatID, userID, mem)
-	_, err = u.db.UpdateMember(chatID, userID, func(m *store.Member) {
+	m, err = u.db.UpdateMember(chatID, userID, func(m *store.Member) {
 		m.ProfileUpdatedAt = time.Now()
 		m.MsgsSinceUpdate = 0
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	if u.analysisDue(m, mem) {
+		if err := u.AnalyseNow(ctx, chatID, userID); err != nil {
+			u.logger.Warn("memory: analysis failed, keeping the old one", "chat", chatID, "user", userID, "err", err)
+		}
+	}
+	return nil
 }
 
 // UpdateSelfNow updates what the bot remembers about itself in the chat: the

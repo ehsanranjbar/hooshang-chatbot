@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/mymmrac/telego"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/ehsanranjbar/hooshang/internal/i18n"
 	"github.com/ehsanranjbar/hooshang/internal/llm"
+	"github.com/ehsanranjbar/hooshang/internal/text"
 )
 
 // maxMediaResults is how many stickers/GIFs find_media returns.
@@ -21,8 +23,9 @@ const maxMediaResults = 8
 func mediaTools() []llm.Tool {
 	return []llm.Tool{
 		{Name: "find_media", Description: "Search the stickers and GIFs members have sent, by an emoji (😂, 🙄) or a few Persian or English words " +
-			"about the reaction or the picture (خنده, تعجب, گربه, facepalm). Returns ids with their descriptions; then call send_media.",
-			Parameters: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","description":"an emoji or a few words"},"kind":{"type":"string","enum":["sticker","gif","any"]}},"required":["query"]}`)},
+			"about the reaction or the picture (خنده, تعجب, گربه, facepalm). With member, lists the ones that member sends most (their favourite stickers: «استیکر مورد علاقه فلانی»), query optional. " +
+			"Returns ids with their descriptions; then call send_media.",
+			Parameters: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","description":"an emoji or a few words"},"kind":{"type":"string","enum":["sticker","gif","any"]},"member":{"type":"string","description":"a member's name, @username or id, or \"reply\" for the author of the replied-to message: list what they send most"}},"required":[]}`)},
 		{Name: "send_media", Description: "Send a sticker or GIF found with find_media, as your answer or alongside it. Use stickers like a person in a group would: now and then, when one says it better than words.",
 			Parameters: json.RawMessage(`{"type":"object","properties":{"id":{"type":"string","description":"an id from find_media"}},"required":["id"]}`)},
 	}
@@ -32,8 +35,9 @@ func mediaTools() []llm.Tool {
 func (b *Bot) toolFindMedia(j job) llm.ToolFunc {
 	return func(ctx context.Context, args string) (string, error) {
 		var a struct {
-			Query string `json:"query"`
-			Kind  string `json:"kind"`
+			Query  string `json:"query"`
+			Kind   string `json:"kind"`
+			Member string `json:"member"`
 		}
 		if err := json.Unmarshal([]byte(args), &a); err != nil {
 			return "error: bad arguments", nil
@@ -41,6 +45,9 @@ func (b *Bot) toolFindMedia(j job) llm.ToolFunc {
 		kind := a.Kind
 		if kind == "any" {
 			kind = ""
+		}
+		if a.Member != "" {
+			return b.memberMedia(j, a.Member, kind, a.Query)
 		}
 		found, err := b.deps.DB.SearchMedia(kind, a.Query, maxMediaResults)
 		if err != nil {
@@ -62,6 +69,45 @@ func (b *Bot) toolFindMedia(j job) llm.ToolFunc {
 		}
 		return strings.TrimSpace(sb.String()), nil
 	}
+}
+
+// memberMedia answers find_media for one member: the stickers and GIFs they
+// sent most in this chat, with how often, optionally only those of a kind or
+// matching a query word.
+func (b *Bot) memberMedia(j job, member, kind, query string) (string, error) {
+	id, err := b.resolveMember(j.chatID, member, j)
+	if err != nil {
+		return err.Error(), nil
+	}
+	mem, err := b.deps.DB.GetMember(j.chatID, id)
+	if err != nil {
+		return "error: unknown member", nil
+	}
+	ids := make([]string, 0, len(mem.Style.Media))
+	for u := range mem.Style.Media {
+		ids = append(ids, u)
+	}
+	sort.Slice(ids, func(a, c int) bool { return mem.Style.Media[ids[a]] > mem.Style.Media[ids[c]] })
+	q := text.Fold(query)
+	var sb strings.Builder
+	n := 0
+	for _, u := range ids {
+		m, err := b.deps.DB.GetMediaDesc(u)
+		if err != nil || m.FileID == "" || (kind != "" && m.Kind != kind) {
+			continue
+		}
+		if q != "" && !strings.Contains(text.Fold(m.Emoji+" "+m.Text), q) {
+			continue
+		}
+		fmt.Fprintf(&sb, "%s: [%s %s] %s (sent %d times)\n", m.UniqueID, m.Kind, m.Emoji, m.Text, mem.Style.Media[u])
+		if n++; n >= maxMediaResults {
+			break
+		}
+	}
+	if n == 0 {
+		return "this member has not sent any sticker or GIF I know of; say so", nil
+	}
+	return strings.TrimSpace(sb.String()), nil
 }
 
 // toolSendMedia is the send_media handler.

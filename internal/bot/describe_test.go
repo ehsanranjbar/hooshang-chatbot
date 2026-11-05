@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -228,5 +229,57 @@ func TestFindAndSendMedia(t *testing.T) {
 	}
 	if out, _ = b.toolSendMedia(j)(context.Background(), `{"id":"nope"}`); !strings.HasPrefix(out, "error") {
 		t.Errorf("unknown id = %q", out)
+	}
+}
+
+func TestFindMediaOfMember(t *testing.T) {
+	webp, _ := os.ReadFile("testdata/sticker.webp")
+	b, db, tg, _ := replyBot(t, 10, llm.Response{Content: "گربه‌ای که از خنده غش کرده"})
+	enableMedia(b)
+	tg.serveFiles(t, map[string][]byte{"stk": webp})
+	_ = db.PutMediaDesc(store.MediaDesc{Text: "مردی که چشم‌هایش را می‌چرخاند", UniqueID: "u-gif", Kind: "gif", FileID: "gif1", Uses: 1}, time.Hour)
+	cat := func(m *telego.Message) {
+		m.Sticker = &telego.Sticker{FileID: "stk", FileUniqueID: "u-stk", Emoji: "😂"}
+	}
+	eyes := func(m *telego.Message) {
+		m.Animation = &telego.Animation{FileID: "gif1", FileUniqueID: "u-gif", Thumbnail: &telego.PhotoSize{FileID: "stk"}}
+	}
+	m := mediaMsg(1, sara, cat)
+	receive(b, m)
+	b.describeTrigger(context.Background(), m)
+	receive(b, mediaMsg(2, sara, cat))
+	receive(b, mediaMsg(3, sara, eyes))
+	receive(b, mediaMsg(4, ali, eyes))
+	receive(b, mediaMsg(5, ali, eyes))
+
+	j := job{kind: jobReply, chatID: testChat, msg: say(b, 6, ali, "هوشنگ استیکر مورد علاقه سارا رو بفرست")}
+	out, _ := b.toolFindMedia(j)(context.Background(), `{"member":"سارا"}`)
+	lines := strings.Split(out, "\n")
+	if len(lines) != 2 || !strings.HasPrefix(lines[0], "u-stk: [sticker 😂]") || !strings.HasSuffix(lines[0], "(sent 2 times)") || !strings.HasPrefix(lines[1], "u-gif:") {
+		t.Fatalf("Sara's media = %q", out)
+	}
+	aliID := strconv.FormatInt(ali.ID, 10)
+	if out, _ = b.toolFindMedia(j)(context.Background(), `{"member":"`+aliID+`","kind":"sticker"}`); !strings.Contains(out, "has not sent") {
+		t.Fatalf("Ali's stickers = %q", out)
+	}
+	if out, _ = b.toolFindMedia(j)(context.Background(), `{"member":"`+aliID+`","query":"چشم"}`); !strings.HasPrefix(out, "u-gif:") || !strings.HasSuffix(out, "(sent 2 times)") {
+		t.Fatalf("Ali's gifs = %q", out)
+	}
+	if out, _ = b.toolFindMedia(j)(context.Background(), `{"member":"کسی"}`); !strings.HasPrefix(out, "error") {
+		t.Fatalf("unknown member = %q", out)
+	}
+	// The counts live in the member's style stats, bounded.
+	mem, _ := db.GetMember(testChat, sara.ID)
+	if mem.Style.Media["u-stk"] != 2 || mem.Style.Media["u-gif"] != 1 {
+		t.Fatalf("Sara's media stats = %+v", mem.Style.Media)
+	}
+	s := store.Style{}
+	for i := 0; i < maxStyleMedia+5; i++ {
+		countMedia(&s, "x"+strconv.Itoa(i))
+		countMedia(&s, "x"+strconv.Itoa(i))
+	}
+	countMedia(&s, "x0")
+	if len(s.Media) != maxStyleMedia || s.Media["x0"] != 3 {
+		t.Fatalf("media cap: %d kept, x0 = %d", len(s.Media), s.Media["x0"])
 	}
 }
