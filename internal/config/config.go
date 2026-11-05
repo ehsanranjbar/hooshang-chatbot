@@ -74,6 +74,8 @@ type Config struct {
 		Words    int           `yaml:"words"`     // description length in words; default 30
 		CacheTTL time.Duration `yaml:"cache_ttl"` // how long sticker/GIF descriptions are reused; default 2160h (90 days)
 		MaxQueue int           `yaml:"max_queue"` // pending descriptions; more are skipped; default 20
+		Frames   int           `yaml:"frames"`    // frames sent for an animated sticker or GIF (1 = thumbnail only); needs ffmpeg; default 3
+		FFmpeg   string        `yaml:"ffmpeg"`    // path to ffmpeg; empty = look it up in PATH (optional: without it the thumbnail is used)
 	} `yaml:"media"`
 	Faal struct {
 		Image      bool   `yaml:"image"`       // send the faal ghazal as a Nastaliq image; default true
@@ -130,6 +132,7 @@ func defaults() *Config {
 	c.Media.Words = 30
 	c.Media.CacheTTL = 90 * 24 * time.Hour
 	c.Media.MaxQueue = 20
+	c.Media.Frames = 3
 	c.Faal.Image = true
 	c.Faal.PoemImages = true
 	c.Faal.Shaper = "auto"
@@ -242,6 +245,9 @@ func (c *Config) Validate() error {
 	}
 	if m := c.Media; m.Enabled && (m.Words < 5 || m.Words > 200 || m.CacheTTL <= 0 || m.MaxQueue < 1) {
 		return fmt.Errorf("media: words must be in [5, 200], cache_ttl > 0, max_queue >= 1")
+	}
+	if m := c.Media; m.Enabled && (m.Frames < 1 || m.Frames > 8) {
+		return fmt.Errorf("media: frames must be in [1, 8]")
 	}
 	if c.Bot.ReactionChance < 0 || c.Bot.ReactionChance > 1 || c.Bot.ReactionCooldown < 0 {
 		return fmt.Errorf("bot.reaction_chance must be in [0, 1] and reaction_cooldown >= 0")

@@ -30,6 +30,8 @@ Only groups where the configured owner is a member are served; anywhere else the
   16k tokens.
 - Optional: HarfBuzz (`brew install harfbuzz`) for correct Nastaliq shaping of the faal and poem
   cards. Without `hb-shape` the cards still render, flat and with some dots misplaced.
+- Optional: ffmpeg (`brew install ffmpeg`) for describing animated stickers and GIFs from several
+  frames; without it the thumbnail is used.
 
 ## Setup
 
@@ -87,3 +89,7 @@ The faal and poem cards embed [Gulzar](https://github.com/googlefonts/Gulzar) an
 [Noto Nastaliq Urdu](https://github.com/notofonts/nastaliq), both under the SIL Open Font License
 (license files next to them in `internal/faalimg/fonts/`). Any other Nastaliq `.ttf` can be set
 with `faal.font`.
+
+## License
+
+[MIT](LICENSE). The embedded fonts keep their own licenses (SIL OFL, see above).

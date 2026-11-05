@@ -1,4 +1,7 @@
 Describe this {{.Kind}} from a Persian Telegram group chat, so someone who can't see it understands it.
+{{- if gt .Frames 1}}
+The {{.Frames}} attached images are {{.Frames}} frames of it, in order from start to end. Describe what happens across them as one short description (the motion), not frame by frame.
+{{- end}}
 {{- if .Hint }}
 It was sent with: {{.Hint}}
 {{- end}}

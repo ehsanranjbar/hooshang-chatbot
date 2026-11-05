@@ -33,10 +33,11 @@ func ReactionTask(d TaskData) (string, error) {
 // MediaData is the input of the media description prompt.
 type MediaData struct {
 	Language string
-	Kind     string // "photo", "sticker", "GIF (its first frame)"
+	Kind     string // "photo", "sticker", "GIF", "GIF (its first frame)", "animated sticker (its thumbnail)"
 	Hint     string // the sticker's emoji or the caption (may be empty)
 	Reaction bool   // stickers and GIFs: say what reaction it expresses
 	Words    int
+	Frames   int // > 1: the attached images are this many frames of an animated sticker or GIF, in order
 }
 
 // MediaDescribe renders the media description prompt.

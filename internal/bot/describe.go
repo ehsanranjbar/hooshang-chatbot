@@ -3,12 +3,14 @@ package bot
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/jpeg" // decoders for image.Decode
 	"image/png"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -22,10 +24,13 @@ import (
 )
 
 // mediaRef is a describable picture of a message: the photo, the sticker (or
-// its thumbnail when it is animated) or a GIF's thumbnail.
+// its thumbnail when it is animated) or a GIF's thumbnail, plus the clip
+// itself when frames can be taken from it.
 type mediaRef struct {
-	kind     string // for the prompt: "photo", "sticker", "GIF (its first frame)"
-	fileID   string // what to download
+	kind     string // for the prompt: "photo", "sticker", "GIF (its first frame)", "animated sticker (its thumbnail)"
+	framed   string // the kind when frames of the clip are sent: "animated sticker" or "GIF"
+	fileID   string // what to download (the thumbnail for clips)
+	clipID   string // the video sticker or GIF to take frames from ("" = none: TGS, photos, static stickers)
 	uniqueID string // the cache key: the sticker's or GIF's file_unique_id
 	cache    bool   // stickers and GIFs repeat; photos don't
 	hint     string // the sticker's emoji or the caption
@@ -58,17 +63,20 @@ func (b *Bot) mediaRefOf(m *telego.Message) (mediaRef, bool) {
 		s := m.Sticker
 		r := mediaRef{kind: "sticker", fileID: s.FileID, uniqueID: s.FileUniqueID, cache: true, hint: s.Emoji,
 			media: "sticker", sendID: s.FileID, emoji: s.Emoji}
-		if s.IsAnimated || s.IsVideo { // TGS / WEBM: only the thumbnail is a picture
+		if s.IsAnimated || s.IsVideo { // TGS / WEBM: the thumbnail is the only still picture
 			if s.Thumbnail == nil {
 				return mediaRef{}, false
 			}
-			r.fileID = s.Thumbnail.FileID
+			r.kind, r.fileID = "animated sticker (its thumbnail)", s.Thumbnail.FileID
+			if s.IsVideo { // ffmpeg can decode WEBM, not Lottie (TGS)
+				r.clipID, r.framed = s.FileID, "animated sticker"
+			}
 		}
 		return r, true
 	case m.Animation != nil && c.GIFs && m.Animation.Thumbnail != nil:
 		a := m.Animation
-		return mediaRef{kind: "GIF (its first frame)", fileID: a.Thumbnail.FileID, uniqueID: a.FileUniqueID, cache: true, hint: m.Caption,
-			media: "gif", sendID: a.FileID}, true
+		return mediaRef{kind: "GIF (its first frame)", framed: "GIF", fileID: a.Thumbnail.FileID, clipID: a.FileID,
+			uniqueID: a.FileUniqueID, cache: true, hint: m.Caption, media: "gif", sendID: a.FileID}, true
 	}
 	return mediaRef{}, false
 }
@@ -169,9 +177,9 @@ func (b *Bot) describeIncoming(m *telego.Message) {
 }
 
 // describeTrigger describes the media of a message the bot is about to answer,
-// if it has none yet, so the reply can see it. It returns the image it
-// downloaded, if any, so the reply needn't download it again.
-func (b *Bot) describeTrigger(ctx context.Context, m *telego.Message) *llm.Image {
+// if it has none yet, so the reply can see it. It returns the images it
+// downloaded, if any, so the reply needn't download them again.
+func (b *Bot) describeTrigger(ctx context.Context, m *telego.Message) []llm.Image {
 	if m == nil {
 		return nil
 	}
@@ -196,44 +204,49 @@ func (b *Bot) describeTrigger(ctx context.Context, m *telego.Message) *llm.Image
 		defer d.release(ref.fileID)
 	}
 	j := describeJob{chatID: m.Chat.ID, msgID: int64(m.MessageID), tag: mediaTag(m), ref: ref}
-	img, err := b.describe(ctx, j)
+	imgs, err := b.describe(ctx, j)
 	if err != nil {
 		b.logger.Warn("media description failed", "chat", j.chatID, "kind", ref.kind, "err", err)
 	}
-	return img
+	return imgs
 }
 
 // describe describes the media of a job (from the cache when it can) and
-// writes the description into the stored message. It returns the image when
-// it had to download one.
-func (b *Bot) describe(ctx context.Context, j describeJob) (*llm.Image, error) {
+// writes the description into the stored message. It returns the images when
+// it had to download them: the frames of an animated sticker or GIF, else the
+// one picture.
+func (b *Bot) describe(ctx context.Context, j describeJob) ([]llm.Image, error) {
 	if j.ref.cache {
 		if c, err := b.deps.DB.GetMediaDesc(j.ref.uniqueID); err == nil {
 			b.applyDescription(j, c.Text)
 			return nil, nil
 		}
 	}
-	img, err := b.downloadImage(ctx, j.ref.fileID)
+	imgs, framed, err := b.mediaImages(ctx, j.ref)
 	if err != nil {
 		return nil, err
 	}
 	c := b.deps.Cfg.Media
+	kind, frames := j.ref.kind, 1
+	if framed {
+		kind, frames = j.ref.framed, len(imgs)
+	}
 	task, _ := prompts.MediaDescribe(prompts.MediaData{
-		Language: b.deps.Cfg.Bot.Language, Kind: j.ref.kind, Hint: j.ref.hint,
-		Reaction: j.ref.kind != "photo", Words: c.Words,
+		Language: b.deps.Cfg.Bot.Language, Kind: kind, Hint: j.ref.hint,
+		Reaction: j.ref.kind != "photo", Words: c.Words, Frames: frames,
 	})
 	resp, err := b.deps.LLM.Chat(ctx, llm.Request{
 		Model:       b.deps.Cfg.LLM.Model,
-		Messages:    []llm.Message{{Role: "user", Content: task, Images: []llm.Image{img}}},
+		Messages:    []llm.Message{{Role: "user", Content: task, Images: imgs}},
 		Temperature: 0.2,
 		MaxTokens:   b.deps.Cfg.LLM.MaxTokens,
 	})
 	if err != nil {
-		return &img, err
+		return imgs, err
 	}
 	desc := cleanDescription(resp.Content, c.Words)
 	if desc == "" {
-		return &img, fmt.Errorf("empty description")
+		return imgs, fmt.Errorf("empty description")
 	}
 	if j.ref.cache {
 		_ = b.deps.DB.PutMediaDesc(store.MediaDesc{
@@ -242,7 +255,7 @@ func (b *Bot) describe(ctx context.Context, j describeJob) (*llm.Image, error) {
 		}, c.CacheTTL)
 	}
 	b.applyDescription(j, desc)
-	return &img, nil
+	return imgs, nil
 }
 
 // applyDescription writes «[label: title — description]» in place of the
@@ -282,33 +295,50 @@ func cleanDescription(s string, words int) string {
 	return s
 }
 
-// maxImageBytes caps a download (photos are picked at ~512–1280 px).
+// maxImageBytes caps a picture download (photos are picked at ~512–1280 px).
 const maxImageBytes = 10 << 20
 
-// downloadImage fetches a Telegram file and returns it as PNG or JPEG (WEBP
-// stickers are converted to PNG).
-func (b *Bot) downloadImage(ctx context.Context, fileID string) (llm.Image, error) {
+// downloadFile fetches a Telegram file (GetFile + FileDownloadURL) and
+// returns its bytes; a file bigger than limit is an error.
+func (b *Bot) downloadFile(ctx context.Context, fileID string, limit int64) ([]byte, error) {
 	f, err := b.deps.TG.GetFile(ctx, &telego.GetFileParams{FileID: fileID})
 	if err != nil {
-		return llm.Image{}, fmt.Errorf("get file: %w", err)
+		return nil, fmt.Errorf("get file: %w", err)
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, b.deps.TG.FileDownloadURL(f.FilePath), nil)
 	if err != nil {
-		return llm.Image{}, err
+		return nil, fmt.Errorf("download: new request") // the URL has the token: don't log it
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return llm.Image{}, fmt.Errorf("download: %w", err) // the URL has the token: don't log it
+		var ue *url.Error // its message has the URL, so the token: keep only the cause
+		if errors.As(err, &ue) {
+			err = ue.Err
+		}
+		return nil, fmt.Errorf("download: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return llm.Image{}, fmt.Errorf("download: status %d", resp.StatusCode)
+		return nil, fmt.Errorf("download: status %d", resp.StatusCode)
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxImageBytes))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
-		return llm.Image{}, fmt.Errorf("download: %w", err)
+		return nil, fmt.Errorf("download: %w", err)
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("download: file is over %d bytes", limit)
+	}
+	return data, nil
+}
+
+// downloadImage fetches a Telegram file and returns it as PNG or JPEG (WEBP
+// stickers are converted to PNG).
+func (b *Bot) downloadImage(ctx context.Context, fileID string) (llm.Image, error) {
+	data, err := b.downloadFile(ctx, fileID, maxImageBytes)
+	if err != nil {
+		return llm.Image{}, err
 	}
 	return toModelImage(data)
 }
@@ -339,15 +369,15 @@ func toModelImage(data []byte) (llm.Image, error) {
 	return llm.Image{MIME: "image/png", Data: buf.Bytes()}, nil
 }
 
-// questionImage returns the picture a reply is about, to attach to the reply
-// call so the model can answer specific questions about it («پشتش چی نوشته؟»,
-// «چند نفرن؟», «این چه رنگیه؟»): the picture of the message the trigger replies to, else the
-// trigger's own. The bot's own images (faal and poem cards) are skipped: their
-// text is already in the transcript.
-// pre is the trigger's own image when describeTrigger just downloaded it.
-func (b *Bot) questionImage(ctx context.Context, m *telego.Message, pre *llm.Image) (llm.Image, int, bool) {
+// questionImage returns the pictures a reply is about, to attach to the reply
+// call so the model can answer specific questions about them («پشتش چی نوشته؟»,
+// «چند نفرن؟», «این چه رنگیه؟»): those of the message the trigger replies to, else the
+// trigger's own (one picture, or the frames of an animated sticker or GIF). The bot's own images
+// (faal and poem cards) are skipped: their text is already in the transcript.
+// pre is the trigger's own images when describeTrigger just downloaded them.
+func (b *Bot) questionImage(ctx context.Context, m *telego.Message, pre []llm.Image) ([]llm.Image, int, bool) {
 	if m == nil {
-		return llm.Image{}, 0, false
+		return nil, 0, false
 	}
 	for _, c := range []*telego.Message{m.ReplyToMessage, m} {
 		if c == nil || (c.From != nil && c.From.IsBot) {
@@ -357,22 +387,26 @@ func (b *Bot) questionImage(ctx context.Context, m *telego.Message, pre *llm.Ima
 		if !ok {
 			continue
 		}
-		if c == m && pre != nil {
-			return *pre, c.MessageID, true
+		if c == m && len(pre) > 0 {
+			return pre, c.MessageID, true
 		}
-		img, err := b.downloadImage(ctx, ref.fileID)
+		imgs, _, err := b.mediaImages(ctx, ref)
 		if err != nil {
 			b.logger.Warn("question image download failed", "chat", m.Chat.ID, "err", err)
-			return llm.Image{}, 0, false
+			return nil, 0, false
 		}
-		return img, c.MessageID, true
+		return imgs, c.MessageID, true
 	}
-	return llm.Image{}, 0, false
+	return nil, 0, false
 }
 
-// imageNote tells the model about the attached picture.
-func imageNote(msgID int) string {
-	return fmt.Sprintf("The picture of message [%d] is attached. Look at it to answer the >> message, "+
-		"with whatever details it asks about (what is in it, text, colors, people's expressions, …). "+
-		"Don't guess who a person you don't know is.", msgID)
+// imageNote tells the model about the attached picture, or the n frames of a clip.
+func imageNote(msgID, n int) string {
+	what := fmt.Sprintf("The picture of message [%d] is attached.", msgID)
+	if n > 1 {
+		what = fmt.Sprintf("The %d pictures attached are frames of the animated sticker or GIF of message [%d], in order from start to end.", n, msgID)
+	}
+	return what + " Look at it to answer the >> message, " +
+		"with whatever details it asks about (what is in it, text, colors, people's expressions, …). " +
+		"Don't guess who a person you don't know is."
 }

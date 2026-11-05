@@ -76,10 +76,13 @@ media:
   enabled: true
   photos: true
   stickers: true
-  gifs: true                             # from the GIF's thumbnail (its first frame)
+  gifs: true                             # from the GIF's thumbnail (its first frame) or, with ffmpeg, from several frames
   words: 30                              # description length in words
   cache_ttl: 2160h                       # reuse sticker/GIF descriptions for 90 days
   max_queue: 20                          # pending descriptions; more are skipped
+  frames: 3                              # frames sent for a video sticker or GIF (1-8; 1 = thumbnail only);
+                                         # needs ffmpeg (brew install ffmpeg), else the thumbnail is used
+  ffmpeg: ""                             # path to ffmpeg; empty = look it up in PATH
 
 faal:
   image: true                            # send the ghazal as a Nastaliq image (معنی in the caption)

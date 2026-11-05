@@ -35,9 +35,9 @@ func (b *Bot) runReply(ctx context.Context, j job) {
 	answered := false
 	j.answered = &answered
 	req, handlers := b.replyRequest(j)
-	if img, id, ok := b.questionImage(ctx, j.msg, pre); ok {
-		req.Messages[1].Images = []llm.Image{img}
-		req.Messages[1].Content += "\n\n" + imageNote(id)
+	if imgs, id, ok := b.questionImage(ctx, j.msg, pre); ok {
+		req.Messages[1].Images = imgs
+		req.Messages[1].Content += "\n\n" + imageNote(id, len(imgs))
 	}
 
 	var resp llm.Response

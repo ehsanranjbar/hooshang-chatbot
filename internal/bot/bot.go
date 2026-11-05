@@ -45,6 +45,9 @@ type Bot struct {
 	workers     *workers
 	rollFn      func() float64 // nil = math/rand; DumpPrompt pins it
 	describer   *describer     // background media descriptions; nil until Run
+	ffOnce      sync.Once      // resolves ffmpeg and ffprobe on first use
+	ffmpeg      string         // "" = not installed
+	ffprobe     string
 	accessMu    sync.Mutex
 	accessCache map[int64]accessEntry
 }

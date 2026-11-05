@@ -167,6 +167,25 @@ var scenarios = []scenario{
 		words := len(strings.Fields(got.Text))
 		return got.Described && persian(got.Text) && words <= 45, fmt.Sprintf("%d words: %s", words, got.Text)
 	}},
+	{"describe_gif", func(t *testing.T, b *Bot, db *store.DB, tg *fakeTG, _ benchModel) (bool, string) {
+		needFFmpeg(t)
+		clip, err := os.ReadFile("testdata/clip.webm") // a moving test pattern with a counter
+		if err != nil {
+			t.Fatal(err)
+		}
+		thumb, _ := os.ReadFile("testdata/sticker.webp")
+		enableMedia(b)
+		b.deps.Cfg.Media.Frames = 3
+		tg.serveFiles(t, map[string][]byte{"clip": clip, "thumb": thumb})
+		m := mediaMsg(1, sara, func(m *telego.Message) {
+			m.Animation = &telego.Animation{FileID: "clip", FileUniqueID: "u-clip", Thumbnail: &telego.PhotoSize{FileID: "thumb"}}
+		})
+		receive(b, m)
+		b.describeTrigger(context.Background(), m)
+		got, _ := db.GetMessage(testChat, 1)
+		words := len(strings.Fields(got.Text))
+		return got.Described && persian(got.Text) && words <= b.deps.Cfg.Media.Words+10+2, fmt.Sprintf("%d words: %s", words, got.Text)
+	}},
 	{"ask_picture", func(t *testing.T, b *Bot, db *store.DB, tg *fakeTG, _ benchModel) (bool, string) {
 		webp, err := os.ReadFile("testdata/sticker.webp") // a Hafez poem card
 		if err != nil {

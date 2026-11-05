@@ -487,9 +487,17 @@ Photos, stickers and GIFs are described by the chat model (a vision model; Gemma
 transcript shows them: `[استیکر: 😂 — گربه‌ای که از خنده غش کرده]`, `[عکس: ساحل در غروب] کپشن`.
 
 - **What is sent:** a photo's smallest size with a side ≥ 512 px (or the largest); a static
-  sticker itself (WEBP → PNG with `x/image/webp`); an animated/video sticker's or a GIF's
-  thumbnail (its first frame). Files come from `GetFile` + `FileDownloadURL`; only the text is
-  kept, never the image. `llm.Message.Images` sends them as OpenAI content parts.
+  sticker itself (WEBP → PNG with `x/image/webp`); a TGS (Lottie) sticker's thumbnail. A video
+  sticker (WEBM) or a GIF (MP4) is described from `media.frames` (3) frames: the clip itself is
+  downloaded (≤ 20 MB, `maxClipBytes`) to a temp file, ffprobe reads its duration and one ffmpeg
+  run (30 s timeout) writes PNG frames at the centres of `frames` equal slices of the clip
+  (`select` filter by timestamp, scaled to ≤ 512 px on the longer side); they all go in one
+  request (`llm.Message.Images` sends any number as OpenAI content parts) and the prompt says
+  they are frames in order, to describe the motion. ffmpeg is optional (`media.ffmpeg`, else
+  PATH, resolved once): when it is missing, the clip is too big, or extraction fails or gives
+  fewer than 2 frames, the thumbnail (its first frame) is used as before, logged at Debug; a
+  failure here never fails the description. `media.frames: 1` means thumbnail only. Files come
+  from `GetFile` + `FileDownloadURL`; only the text is kept, never the image.
 - **Prompt** (`media_describe.tmpl`): what is in it, any text in it, and for stickers/GIFs the
   reaction it expresses; never guess who a person is; at most `media.words` (30) words, Persian.
   `cleanDescription` makes it one line, caps it at words+10, and drops leaked reasoning.
@@ -501,10 +509,12 @@ transcript shows them: `[استیکر: 😂 — گربه‌ای که از خند
   skipped). A message the bot is about to answer is described first, synchronously
   (`describeTrigger` in `runReply`). `Message.Described` marks a done message.
 - **Questions about a picture:** when the bot answers a message that replies to a member's photo,
-  sticker or GIF (or carries one itself), `questionImage` downloads that picture again and attaches
-  it to the reply call, with a note to answer whatever specific question is asked about it (the
-  stored description is short). The bot's own cards are skipped (their text is in the transcript).
-- Config: `media: {enabled, photos, stickers, gifs, words: 30, cache_ttl: 2160h, max_queue: 20}`.
+  sticker or GIF (or carries one itself), `questionImage` downloads that picture again (for a
+  video sticker or GIF, its frames) and attaches it to the reply call, with a note to answer
+  whatever specific question is asked about it (the stored description is short). The bot's own
+  cards are skipped (their text is in the transcript).
+- Config: `media: {enabled, photos, stickers, gifs, words: 30, cache_ttl: 2160h, max_queue: 20,
+  frames: 3 (1–8), ffmpeg: ""}`. Descriptions cached from one frame age out with `cache_ttl`.
 
 ## 6d. Reactions, stickers and GIFs, backlog
 
@@ -720,7 +730,7 @@ Open ideas, in order of value: restate the admin's orders at the end of the repl
 still sometimes mocks the admin despite a standing order); a profile cleanup pass (one-off plans
 end up in facts, the bot's own name as a nickname); daily Badger backups and an admin `/reset`;
 logs to a file and richer `/status`; a shared LLM queue that serves replies first; voice
-transcription; multi-frame GIF descriptions.
+transcription.
 
 ---
 

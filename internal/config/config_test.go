@@ -405,3 +405,26 @@ func TestShaperIsValidated(t *testing.T) {
 		t.Fatal("shaper 'harfbuz' accepted")
 	}
 }
+
+func TestMediaFramesBounds(t *testing.T) {
+	c, err := Load(writeConfig(t, minimal))
+	if err != nil || c.Media.Frames != 3 || c.Media.FFmpeg != "" {
+		t.Fatalf("defaults: frames %d, ffmpeg %q, err %v", c.Media.Frames, c.Media.FFmpeg, err)
+	}
+	for _, tc := range []struct {
+		yaml string
+		ok   bool
+	}{
+		{"media:\n  frames: 1\n", true},
+		{"media:\n  frames: 8\n", true},
+		{"media:\n  frames: 0\n", false},
+		{"media:\n  frames: 9\n", false},
+		{"media:\n  frames: -1\n", false},
+		{"media:\n  enabled: false\n  frames: 0\n", true},
+		{"media:\n  ffmpeg: /nonexistent/ffmpeg\n", true}, // existence is not checked: the bot runs without it
+	} {
+		if _, err := Load(writeConfig(t, minimal+tc.yaml)); (err == nil) != tc.ok {
+			t.Errorf("%q: err = %v, want ok=%v", tc.yaml, err, tc.ok)
+		}
+	}
+}
