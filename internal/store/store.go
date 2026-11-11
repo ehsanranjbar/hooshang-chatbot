@@ -22,8 +22,8 @@ import (
 	"github.com/ehsanranjbar/kvutil/kv/badgerkv"
 	"github.com/ehsanranjbar/kvutil/store/record"
 	"github.com/ehsanranjbar/kvutil/store/typed"
-
-	"github.com/ehsanranjbar/hooshang/internal/rag"
+	"github.com/ehsanranjbar/kvutil/upkeep"
+	"github.com/ehsanranjbar/kvutil/vector"
 )
 
 // ErrNotFound is returned when a chat or member does not exist.
@@ -154,20 +154,39 @@ type DB struct {
 	// Retrieval (RAG): archived messages and their vectors, item and media vectors.
 	archive       *typed.Store[Key, Archived]
 	archiveByUser *typed.Store[Key3, struct{}]
-	msgVectors    *typed.Store[Key, rag.Vector]
-	itemVectors   *typed.Store[Key3, rag.Vector]
-	mediaVectors  *typed.Store[Key, rag.Vector]
+	msgVectors    *embeddingStore[Key]
+	itemVectors   *embeddingStore[Key3]
+	mediaVectors  *embeddingStore[Key]
 	meta          *typed.Store[string, EmbeddingMeta]
+
+	// upkeep runs the background work of the stores: placing vectors in the
+	// partitions of their indexes, and deleting the embeddings that expired.
+	upkeep *upkeep.Runner
 }
 
-// Open opens the Badger database in dir. Messages expire after retention.
-func Open(dir string, retention time.Duration) (*DB, error) {
+// Options are what a database is opened with.
+type Options struct {
+	// Retention is how long plain messages are kept.
+	Retention time.Duration
+	// EmbeddingModel and EmbeddingDims are the model the vectors come from and
+	// their dimensions. A change of either wipes the stored vectors; an empty
+	// model (retrieval off) leaves them as they are.
+	EmbeddingModel string
+	EmbeddingDims  int
+}
+
+// DefaultEmbeddingDims is the dimensions of the vector indexes when none are
+// given (bge-m3's).
+const DefaultEmbeddingDims = 1024
+
+// Open opens the Badger database in dir.
+func Open(dir string, opts Options) (*DB, error) {
 	opt := badger.DefaultOptions(dir).WithLoggingLevel(badger.WARNING)
 	base, err := badgerkv.Open(opt)
 	if err != nil {
 		return nil, fmt.Errorf("open badger: %w", err)
 	}
-	d, err := define(base, retention)
+	d, err := define(base, opts)
 	if err != nil {
 		return nil, errors.Join(err, base.Close())
 	}
@@ -176,16 +195,21 @@ func Open(dir string, retention time.Duration) (*DB, error) {
 }
 
 // OpenWith defines the stores on any kv.DB; tests use memkv.New().
-func OpenWith(db kv.DB, retention time.Duration) (*DB, error) {
-	return define(db, retention)
+func OpenWith(db kv.DB, opts Options) (*DB, error) {
+	return define(db, opts)
 }
 
-func define(db kv.DB, retention time.Duration) (*DB, error) {
+func define(db kv.DB, opts Options) (*DB, error) {
+	ctx := context.Background()
 	ks, err := keyspace.Open(db)
 	if err != nil {
 		return nil, fmt.Errorf("open keyspace: %w", err)
 	}
-	d := &DB{db: db, retention: retention}
+	d := &DB{db: db, retention: opts.Retention}
+	dims := opts.EmbeddingDims
+	if dims <= 0 {
+		dims = DefaultEmbeddingDims
+	}
 
 	d.chats = typed.New[int64, Chat](ks.Prefix("chats"))
 	d.members = record.New[Key, Member](ks.Prefix("members"))
@@ -204,24 +228,66 @@ func define(db kv.DB, retention time.Duration) (*DB, error) {
 	d.modLog = typed.New[Key, ModEntry](ks.Prefix("mod_log"))
 	d.archive = typed.New[Key, Archived](ks.Prefix("archive"))
 	d.archiveByUser = typed.New[Key3, struct{}](ks.Prefix("archive_by_user"))
-	d.msgVectors = typed.New[Key, rag.Vector](ks.Prefix("msg_vectors"))
-	d.itemVectors = typed.New[Key3, rag.Vector](ks.Prefix("item_vectors"))
-	d.mediaVectors = typed.New[Key, rag.Vector](ks.Prefix("media_vectors"))
+	// Messages and media are searched across many vectors: partitioned and
+	// quantized. Items are searched among one entity's few: exact.
+	msgPrefix, itemPrefix, mediaPrefix := ks.Prefix("msg_embeddings"), ks.Prefix("item_embeddings"), ks.Prefix("media_embeddings")
+	d.msgVectors = newEmbeddingStore[Key]("msg_embeddings", msgPrefix, dims, vector.Partitioned(0), vector.Quantized())
+	d.itemVectors = newEmbeddingStore[Key3]("item_embeddings", itemPrefix, dims)
+	d.mediaVectors = newEmbeddingStore[Key]("media_embeddings", mediaPrefix, dims, vector.Partitioned(0), vector.Quantized())
 	d.meta = typed.New[string, EmbeddingMeta](ks.Prefix("meta"))
 
-	report, err := ks.Migrate(context.Background(), d.chats, d.members, d.messages, d.memories, d.edits, d.media, d.modLog,
-		d.archive, d.archiveByUser, d.msgVectors, d.itemVectors, d.mediaVectors, d.meta)
+	// A change of the model is found before the migration, so that the vector
+	// indexes are built from no vectors and not from ones of other dimensions.
+	want := EmbeddingMeta{Model: opts.EmbeddingModel, Dims: dims}
+	changed, err := d.wipeChangedEmbeddings(ctx, want, msgPrefix, itemPrefix, mediaPrefix)
+	if err != nil {
+		return nil, err
+	}
+
+	report, err := ks.Migrate(ctx, d.chats, d.members, d.messages, d.memories, d.edits, d.media, d.modLog,
+		d.archive, d.archiveByUser, d.msgVectors.store, d.itemVectors.store, d.mediaVectors.store, d.meta)
 	if err != nil {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 	if s := report.String(); s != "" {
 		slog.Info("database migrated", "report", s)
 	}
+	if changed {
+		if err := d.db.Update(func(tx kv.Tx) error { return d.meta.Instantiate(tx).Set("embedding", &want) }); err != nil {
+			return nil, err
+		}
+	}
+
+	d.upkeep = upkeep.New(db, upkeep.WithErrorHandler(func(err error) { slog.Warn("database upkeep", "err", err) })).
+		Add(d.msgVectors.store, d.itemVectors.store, d.mediaVectors.store)
+	for _, j := range []upkeep.Job{
+		&expiryJob[Key]{s: d.msgVectors, now: time.Now},
+		&expiryJob[Key]{s: d.mediaVectors, now: time.Now},
+	} {
+		d.upkeep.AddJob(j, upkeep.Every(10*time.Minute))
+	}
 	return d, nil
 }
 
-// Close closes the database.
+// StartUpkeep runs the background work of the database until Close: it places
+// new vectors in the partitions of their indexes and deletes the expired
+// ones. The indexes are right without it, but searches slow down.
+func (d *DB) StartUpkeep(ctx context.Context) {
+	d.upkeep.Spawn(ctx)
+}
+
+// Upkeep does all the background work that is outstanding now (tests, tools).
+func (d *DB) Upkeep(ctx context.Context) error {
+	return d.upkeep.Drain(ctx)
+}
+
+// Close stops the upkeep, letting its current step finish, and closes the database.
 func (d *DB) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := d.upkeep.Shutdown(ctx); err != nil {
+		slog.Warn("database upkeep did not stop", "err", err)
+	}
 	if d.closer != nil {
 		return d.closer()
 	}

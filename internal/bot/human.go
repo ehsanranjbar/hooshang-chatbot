@@ -32,7 +32,7 @@ func (b *Bot) systemPrompt(chatID int64) string {
 	sys, _ := prompts.System(prompts.SystemData{
 		Name:     c.Name,
 		Language: c.Language,
-		Now:      prompts.FormatNow(time.Now()),
+		Now:      prompts.FormatHour(time.Now()),
 		Persona:  c.Persona.Text,
 		Notes:    c.Persona.Notes,
 		Mood:     prompts.MoodPhrase(b.moodOfDay(chatID, time.Now())),

@@ -16,7 +16,7 @@ import (
 // synchronously through flush.
 func enableRAG(b *Bot) {
 	b.deps.Cfg.LLM.EmbeddingModel = "fake-embed"
-	b.deps.Cfg.Features.RAG = &config.RAGFeature{Enabled: true, ArchiveTTL: 24 * time.Hour, TopK: 3, MinScore: 0.2, DecayDays: 30, Batch: 16, MaxQueue: 100, MaxPerChat: 1000}
+	b.deps.Cfg.Features.RAG = &config.RAGFeature{Enabled: true, ArchiveTTL: 24 * time.Hour, TopK: 3, MinScore: 0.2, DecayDays: 30, Batch: 16, MaxQueue: 100}
 	b.embedder = newEmbedder(b)
 }
 
@@ -40,8 +40,8 @@ func TestArchiveAndRelatedMessages(t *testing.T) {
 	if a, err := db.GetArchived(testChat, 1); err != nil || a.UserID != ali.ID {
 		t.Fatalf("message not archived: %v %v", a, err)
 	}
-	if b.embedder.index(testChat).Len() != 8 {
-		t.Fatalf("index has %d vectors, want 8", b.embedder.index(testChat).Len())
+	if st, err := db.MsgIndexStats(); err != nil || st.Unplaced != 8 {
+		t.Fatalf("index has %+v (%v), want 8 vectors", st, err)
 	}
 	m := say(b, 9, ali, "هوشنگ یادته ماشینمو فروختم؟ پراید سفید")
 	flushAll(b)
@@ -99,8 +99,11 @@ func TestPurgeArchiveOnIgnoreAndForget(t *testing.T) {
 	if _, err := db.GetArchived(testChat, 2); err != nil {
 		t.Error("Sara's archive was purged")
 	}
-	if b.embedder.index(testChat).Len() != 1 {
-		t.Errorf("index has %d vectors, want 1", b.embedder.index(testChat).Len())
+	if _, err := db.MsgVector(testChat, 1); err == nil {
+		t.Error("Ali's vector survived the purge")
+	}
+	if _, err := db.MsgVector(testChat, 2); err != nil {
+		t.Error("Sara's vector was purged")
 	}
 }
 
@@ -120,7 +123,7 @@ func TestItemVectorsAndSelection(t *testing.T) {
 	if !ok {
 		t.Fatal("query failed")
 	}
-	j := job{chatID: testChat, queryVec: &q, queryOK: true}
+	j := job{chatID: testChat, queryVec: q, queryOK: true, queried: true}
 	items, ok := b.selectItems(j, ali.ID, mem, 40)
 	if !ok || len(items) < 2 {
 		t.Fatalf("selected %+v", items)
@@ -137,21 +140,6 @@ func TestItemVectorsAndSelection(t *testing.T) {
 	flushAll(b)
 	if b.embedder.embedded != before {
 		t.Error("unchanged items were embedded again")
-	}
-}
-
-func TestEmbeddingModelChangeWipesVectors(t *testing.T) {
-	b, db, _, _ := replyBot(t, 10)
-	enableRAG(b)
-	say(b, 1, ali, "ماشینمو فروختم، پراید سفید بود و خیلی دوستش داشتم")
-	flushAll(b)
-	_ = db.SetEmbeddingMeta(store.EmbeddingMeta{Model: "other"})
-	b.embedder.checkModel()
-	if vecs, _ := db.MsgVectors(testChat); len(vecs) != 0 {
-		t.Error("vectors survived a model change")
-	}
-	if meta, _ := db.GetEmbeddingMeta(); meta.Model != "fake-embed" {
-		t.Errorf("meta = %+v", meta)
 	}
 }
 

@@ -28,6 +28,9 @@ The group's own words that come up here (as members explained them; meanings onl
 {{.Glossary}}
 
 {{end -}}
+{{- if .Admin }}{{.Admin}}
+
+{{end -}}
 Recent messages, oldest first ([id] name: text, ↩︎[id] = a reply to that message; "(you)" is you):
 {{.Transcript}}
 

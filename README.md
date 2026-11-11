@@ -50,7 +50,7 @@ What it does:
 - **Hafez faal and poems** from [ganjoor.net](https://ganjoor.net), rendered as a Nastaliq card
   (معنی and a short تعبیر for the faal).
 
-Only groups where the configured owner is a member are served; anywhere else the bot leaves.
+Only groups where at least one configured admin is a member are served; anywhere else the bot leaves.
 
 ## Requirements
 
@@ -81,7 +81,7 @@ Only groups where the configured owner is a member are served; anywhere else the
 
 1. Create a bot with [@BotFather](https://t.me/BotFather), turn **off** group privacy mode, and
    find your own user id (e.g. with @userinfobot).
-2. `cp config.example.yaml config.yaml` and set `telegram.token`, `telegram.owner_id` and
+2. `cp config.example.yaml config.yaml` and set `telegram.token`, `telegram.admin_ids` and
    `llm.model`. Every key is documented in the example file. The token can also come from
    `HOOSHANG_TELEGRAM_TOKEN`. The optional parts live under `features:`: **a feature is on when
    its section is present**, so comment a section out to turn the feature off (`enabled: false`

@@ -54,11 +54,11 @@ type Bot struct {
 	workers     *workers
 	rollFn      func() float64                             // nil = math/rand; DumpPrompt pins it
 	sleepFn     func(ctx context.Context, d time.Duration) // nil = a real wait; tests skip it
-	describer   *enricher
-	embedder    *embedder // nil when retrieval is off                                  // background media descriptions; nil until Run (and without features.media)
-	transcriber *enricher // background voice transcriptions; nil until Run (and without features.voice)
-	ffOnce      sync.Once // resolves ffmpeg and ffprobe on first use
-	ffmpeg      string    // "" = not installed
+	describer   *enricher                                  // background media descriptions; nil until Run (and without features.media)
+	embedder    *embedder                                  // nil when retrieval is off
+	transcriber *enricher                                  // background voice transcriptions; nil until Run (and without features.voice)
+	ffOnce      sync.Once                                  // resolves ffmpeg and ffprobe on first use
+	ffmpeg      string                                     // "" = not installed
 	ffprobe     string
 	accessMu    sync.Mutex
 	accessCache map[int64]accessEntry
@@ -195,7 +195,7 @@ func (b *Bot) handleReaction(ctx context.Context, chat telego.Chat, messageID, d
 	if chat.Type != "group" && chat.Type != "supergroup" {
 		return
 	}
-	if !b.ownerInGroup(ctx, chat.ID) {
+	if !b.adminInGroup(ctx, chat.ID) {
 		return
 	}
 	_ = b.deps.DB.UpdateMessage(chat.ID, int64(messageID), func(m *store.Message) {

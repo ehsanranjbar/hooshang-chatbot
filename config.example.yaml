@@ -5,7 +5,7 @@
 
 telegram:
   token: "123456:FAKE-TELEGRAM-TOKEN"
-  owner_id: 123456789        # your Telegram user ID (find it with @userinfobot)
+  admin_ids: [123456789]        # Telegram user IDs of the bot's admins (find yours with @userinfobot)
 
 llm:
   base_url: "http://localhost:1234/v1"   # LM Studio; later: https://openrouter.ai/api/v1
@@ -18,6 +18,7 @@ llm:
   tools: true                            # enable LLM tool calling at all (faal/poem, stickers, glossary, admin memory edits)
   json_schema: true                      # response_format json_schema for memory extraction (31B: 5/5, 2x faster; breaks the 26B)
   embedding_model: "text-embedding-bge-m3"  # the embedding model loaded next to the chat model (features.rag); "" = no retrieval
+  embedding_dims: 1024                   # dimensions of the embedding model's vectors; a change wipes the stored vectors
   context_tokens: 32768                  # the context window the chat model is loaded with; prompts are trimmed to fit
 
 bot:
@@ -171,7 +172,6 @@ features:
     decay_days: 30                       # half-life of the recency bonus
     batch: 16                            # texts per embedding call
     max_queue: 500                       # pending embeddings
-    max_per_chat: 50000                  # message vectors kept in memory per chat
 
   # Greetings: now and then answers a member's «صبح بخیر» / «شب بخیر», welcomes
   # new members and comments when someone leaves.

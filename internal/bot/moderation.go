@@ -127,7 +127,7 @@ func (b *Bot) moderate(ctx context.Context, j job, a modArgs, entry *store.ModEn
 }
 
 // modTarget resolves the member an action is aimed at and refuses the ones
-// that must never be moderated: the owner, an admin and the bot itself.
+// that must never be moderated: an admin and the bot itself.
 // Members who are ignored resolve too.
 func (b *Bot) modTarget(j job, ref string) (int64, string, error) {
 	id, err := b.resolveModerationTarget(j.chatID, ref, j)
@@ -138,7 +138,7 @@ func (b *Bot) modTarget(j job, ref string) (int64, string, error) {
 	switch {
 	case id == b.botID:
 		return 0, "", refusal("that is me, I don't moderate myself")
-	case id == b.deps.Cfg.Telegram.OwnerID || b.deps.Admins.IsAdmin(j.chatID, id):
+	case b.deps.Admins.IsAdmin(j.chatID, id):
 		return 0, "", refusal(name + " is an admin")
 	}
 	return id, name, nil

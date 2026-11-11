@@ -21,7 +21,7 @@ func runCheck(path string, w io.Writer) int {
 		return 1
 	}
 	fmt.Fprintf(w, "config %s: ok\n", path)
-	fmt.Fprintf(w, "bot: %s, model %s at %s, owner %d\n", cfg.Bot.Name, cfg.LLM.Model, cfg.LLM.BaseURL, cfg.Telegram.OwnerID)
+	fmt.Fprintf(w, "bot: %s, model %s at %s, admins %v\n", cfg.Bot.Name, cfg.LLM.Model, cfg.LLM.BaseURL, cfg.Telegram.AdminIDs)
 	on := cfg.Features.Active()
 	fmt.Fprintf(w, "features on (%d): %s\n", len(on), featureNames(on))
 	fmt.Fprintf(w, "storage: %s\n", cfg.Storage.Path)

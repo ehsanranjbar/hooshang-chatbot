@@ -23,7 +23,7 @@ func writeConfig(t *testing.T, content string) string {
 const minimal = `
 telegram:
   token: "1:FAKE"
-  owner_id: 7
+  admin_ids: [7]
 llm:
   model: "m"
 `
@@ -110,7 +110,7 @@ func TestLoadExplicitValues(t *testing.T) {
 	content := `
 telegram:
   token: "1:FAKE"
-  owner_id: 7
+  admin_ids: [7]
 llm:
   base_url: "https://openrouter.ai/api/v1"
   api_key: "sk"
@@ -189,7 +189,7 @@ func TestLoadExplicitZeros(t *testing.T) {
 	content := `
 telegram:
   token: "1:FAKE"
-  owner_id: 7
+  admin_ids: [7]
 llm:
   model: "m"
   temperature: 0
@@ -212,7 +212,7 @@ func TestLoadRateLimitZeroRejected(t *testing.T) {
 	content := `
 telegram:
   token: "1:FAKE"
-  owner_id: 7
+  admin_ids: [7]
 llm:
   model: "m"
 bot:
@@ -264,7 +264,7 @@ func TestValidateRequired(t *testing.T) {
 	applyDefaultsForTest(valid)
 
 	valid.Telegram.Token = "1:FAKE"
-	valid.Telegram.OwnerID = 7
+	valid.Telegram.AdminIDs = []int64{7}
 	valid.LLM.Model = "m"
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("complete config: %v", err)
@@ -277,13 +277,13 @@ func TestValidateRequired(t *testing.T) {
 	}
 
 	c = clone(valid)
-	c.Telegram.OwnerID = 0
+	c.Telegram.AdminIDs = nil
 	if err := c.Validate(); err == nil {
-		t.Error("missing owner_id: want error")
+		t.Error("missing admin_ids: want error")
 	}
-	c.Telegram.OwnerID = -3
+	c.Telegram.AdminIDs = []int64{7, -3}
 	if err := c.Validate(); err == nil {
-		t.Error("negative owner_id: want error")
+		t.Error("negative admin id: want error")
 	}
 
 	c = clone(valid)
@@ -297,7 +297,7 @@ func TestValidateBadRanges(t *testing.T) {
 	valid := &Config{}
 	applyDefaultsForTest(valid)
 	valid.Telegram.Token = "1:FAKE"
-	valid.Telegram.OwnerID = 7
+	valid.Telegram.AdminIDs = []int64{7}
 	valid.LLM.Model = "m"
 
 	c := clone(valid)

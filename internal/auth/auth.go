@@ -2,14 +2,21 @@
 package auth
 
 // Admins decides whether a user may administer a chat. All admin checks go
-// through this interface so more admins can be added later.
+// through this interface so other sources of admins can be added later.
 type Admins interface {
 	IsAdmin(chatID, userID int64) bool
 }
 
-// Owner is the only Admins implementation for now: the single hard admin
-// from telegram.owner_id.
-type Owner struct{ ID int64 }
+// List is the Admins implementation backed by telegram.admin_ids: a fixed set
+// of users who are admins in every chat.
+type List struct{ IDs []int64 }
 
-// IsAdmin reports whether userID is the owner.
-func (o Owner) IsAdmin(_, userID int64) bool { return userID == o.ID }
+// IsAdmin reports whether userID is one of the listed admins.
+func (l List) IsAdmin(_, userID int64) bool {
+	for _, id := range l.IDs {
+		if id == userID {
+			return true
+		}
+	}
+	return false
+}

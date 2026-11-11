@@ -11,9 +11,14 @@ to `internal/store/store_test.go`, and run it on both engines.
 ## 1. The API of `internal/store` (use only this)
 
 ```go
-db, err := store.Open(cfg.Storage.Path, cfg.Bot.MessageRetention) // Badger on disk
-db, err := store.OpenWith(memkv.New(), time.Hour)                  // tests: in memory
-defer db.Close()
+db, err := store.Open(cfg.Storage.Path, store.Options{            // Badger on disk
+    Retention: cfg.Bot.MessageRetention,
+    EmbeddingModel: model, EmbeddingDims: cfg.LLM.EmbeddingDims,  // a change of either wipes the vectors
+})
+db, err := store.OpenWith(memkv.New(), store.Options{Retention: time.Hour, EmbeddingDims: 256}) // tests
+db.StartUpkeep(ctx)                                             // background: vector partitions, expiry
+err = db.Upkeep(ctx)                                            // tests/tools: do it all now
+defer db.Close()                                                // stops the upkeep, then closes
 
 // chats — a missing chat reads as a zero Chat (no error)
 c, err := db.GetChat(chatID)                                  // (store.Chat, error)
@@ -55,6 +60,16 @@ es, err := db.RecentModEntries(chatID, 10)                     // newest first
 
 // the shared sticker/GIF cache, all of it (the data export)
 all, err := db.AllMedia()                                       // []store.MediaDesc
+
+// retrieval (rag.go): vectors are []float32 as the model gave them
+err = db.Archive(chatID, msgID, store.Archived{...}, ttl)
+err = db.PutMsgVector(chatID, msgID, store.Embedding{Vec: v, Hash: h, At: now}, ttl)
+hits, err := db.SearchMessages(chatID, q, k)                    // []store.Hit{ID, Score=cosine}, best first; approximate
+err = db.PutItemVector(chatID, entity, itemID, store.Embedding{...})
+scores, err := db.ScoreItems(chatID, entity, q)                 // map[itemID]cosine, exact
+err = db.PutMediaVector(uniqueID, store.Embedding{...}, ttl)
+hits, err = db.NearestMedia(q, k)                                // Hit.ID = media key hash; db.MediaByHash(h)
+st, err := db.MsgIndexStats()                                    // vector.Stats{Partitions, Unplaced}
 
 // memory edit audit log
 err = db.AddEdit(chatID, &store.Edit{AdminID: ..., UserID: ..., Request: ..., Ops: ..., Before: ..., After: ...})
@@ -100,10 +115,15 @@ Types (in `internal/store/store.go`, `memory.go`, `rag.go`): `Chat`, `Member` (i
 | `mod_log` | `typed.Store` | `Pair(chatID, unixNano)` | `ModEntry` | audit log of the admin's moderation actions (also refused and failed ones); `AddModEntry`, `RecentModEntries(chat, n)` |
 | `archive` | `typed.Store` | `Pair(chatID, messageID)` | `Archived` | member messages kept for retrieval, `SetWithTTL` `features.rag.archive_ttl` |
 | `archive_by_user` | `typed.Store` | `(chatID, (userID, messageID))` | empty | lets `PurgeArchive` delete one member's rows; same TTL |
-| `msg_vectors` | `typed.Store` | `Pair(chatID, messageID)` | `rag.Vector` | int8 embeddings of archived messages; same TTL; loaded into a per-chat in-memory index |
-| `item_vectors` | `typed.Store` | `(chatID, (entity, itemID))` | `rag.Vector` | embeddings of memory items |
-| `media_vectors` | `typed.Store` | `Pair(0, media hash)` | `rag.Vector` | embeddings of sticker/GIF descriptions |
-| `meta` | `typed.Store` | `string` | `EmbeddingMeta` | `"embedding"`: the model that made the vectors; a change wipes them |
+| `msg_embeddings` | `ext.Store` | `Pair(chatID, messageID)` | `Embedding` | vectors of archived messages; `by_vector` (cosine, partitioned + quantized; searched with `Where(Chat == chatID)`), `by_expiry` (`Expires` > 0) |
+| `item_embeddings` | `ext.Store` | `(chatID, (entity, itemID))` | `Embedding` | vectors of memory items; `by_vector` exact, searched `Among` one entity's range; never expire |
+| `media_embeddings` | `ext.Store` | `Pair(0, media hash)` | `Embedding` | vectors of sticker/GIF descriptions; `by_vector` partitioned + quantized; `by_expiry` |
+| `meta` | `typed.Store` | `string` | `EmbeddingMeta` | `"embedding"`: the model and dims of the vectors; a change wipes the three stores above before `Migrate` |
+
+A store with extensions refuses `SetWithTTL` (`ext.ErrTTLWithExtensions`), so an `Embedding` carries
+`Expires` (unix seconds) and an upkeep job deletes the expired ones through `by_expiry`. One
+`upkeep.Runner` per DB runs it every 10 minutes, and the partition upkeep of the vector indexes
+(placing new vectors, splitting and dissolving partitions) every second.
 
 Group chat IDs are negative. Integer keys sort correctly with negative values (this is tested).
 

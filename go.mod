@@ -4,7 +4,7 @@ go 1.27.3
 
 require (
 	github.com/dgraph-io/badger/v4 v4.9.6
-	github.com/ehsanranjbar/kvutil v0.0.0-20261031082342-f55b89d518a4
+	github.com/ehsanranjbar/kvutil v0.0.0-20261111180747-075b518efeed
 	github.com/go-text/render v0.2.1
 	github.com/go-text/typesetting v0.3.5
 	github.com/mymmrac/telego v1.12.1

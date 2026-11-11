@@ -29,7 +29,7 @@ func groupMsg(from *telego.User, text string) *telego.Message {
 // group (owner present, so access is allowed).
 func runCommand(tg *fakeTG, from *telego.User, text string) {
 	b, _ := newTestBot(tg, testBotID, testBotUser)
-	b.deps.Cfg.Telegram.OwnerID = ownerID
+	b.deps.Cfg.Telegram.AdminIDs = []int64{ownerID}
 	b.deps.Admins = &ownerAdmins{ownerID}
 	tg.member = &telego.ChatMemberOwner{Status: "creator", User: telego.User{ID: ownerID}}
 	b.handleMessage(nil, groupMsg(from, text))
@@ -55,7 +55,7 @@ func TestHelpCommand(t *testing.T) {
 func TestNoteaseCommand(t *testing.T) {
 	tg := newFakeTG()
 	b, db := newTestBot(tg, testBotID, testBotUser)
-	b.deps.Cfg.Telegram.OwnerID = ownerID
+	b.deps.Cfg.Telegram.AdminIDs = []int64{ownerID}
 	b.deps.Admins = &ownerAdmins{ownerID}
 	tg.member = &telego.ChatMemberOwner{Status: "creator", User: telego.User{ID: ownerID}}
 
@@ -71,7 +71,7 @@ func TestNoteaseCommand(t *testing.T) {
 
 	tg = newFakeTG()
 	b, _ = newTestBot(tg, testBotID, testBotUser)
-	b.deps.Cfg.Telegram.OwnerID = ownerID
+	b.deps.Cfg.Telegram.AdminIDs = []int64{ownerID}
 	b.deps.Admins = &ownerAdmins{ownerID}
 	tg.member = &telego.ChatMemberOwner{Status: "creator", User: telego.User{ID: ownerID}}
 	b.handleMessage(nil, groupMsg(&telego.User{ID: otherID, FirstName: "Ali"}, "/teaseok"))
@@ -113,7 +113,7 @@ func TestIgnoredGroupWithoutOwner(t *testing.T) {
 	tg := newFakeTG()
 	tg.member = &telego.ChatMemberLeft{Status: "left"}
 	b, _ := newTestBot(tg, testBotID, testBotUser)
-	b.deps.Cfg.Telegram.OwnerID = ownerID
+	b.deps.Cfg.Telegram.AdminIDs = []int64{ownerID}
 	b.deps.Admins = &ownerAdmins{ownerID}
 
 	b.handleMessage(nil, groupMsg(&telego.User{ID: otherID, FirstName: "Ali"}, "/help"))
@@ -132,7 +132,7 @@ func TestAllowedGroupWithOwnerMember(t *testing.T) {
 	tg := newFakeTG()
 	tg.member = &telego.ChatMemberMember{Status: "member"}
 	b, _ := newTestBot(tg, testBotID, testBotUser)
-	b.deps.Cfg.Telegram.OwnerID = ownerID
+	b.deps.Cfg.Telegram.AdminIDs = []int64{ownerID}
 	b.deps.Admins = &ownerAdmins{ownerID}
 
 	b.handleMessage(nil, groupMsg(&telego.User{ID: otherID, FirstName: "Ali"}, "/help"))

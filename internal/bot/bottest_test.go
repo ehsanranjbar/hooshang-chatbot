@@ -14,11 +14,11 @@ import (
 	"github.com/ehsanranjbar/hooshang/internal/store"
 )
 
-// newTestConfig returns a valid config for tests (owner 1, generous limits).
+// newTestConfig returns a valid config for tests (admin 1, generous limits).
 func newTestConfig() *config.Config {
 	cfg := &config.Config{}
 	cfg.Telegram.Token = "t"
-	cfg.Telegram.OwnerID = 1
+	cfg.Telegram.AdminIDs = []int64{1}
 	cfg.LLM.BaseURL = "http://localhost:1234/v1"
 	cfg.LLM.APIKey = "lm-studio"
 	cfg.LLM.Model = "test-model"
@@ -54,7 +54,7 @@ func newTestConfig() *config.Config {
 // ID is set to botID (bypassing GetMe, which needs a concrete *telego.Bot).
 func newTestBot(tg TG, botID int64, botUsername string) (*Bot, *store.DB) {
 	cfg := newTestConfig()
-	db, err := store.OpenWith(memkv.New(), time.Hour)
+	db, err := store.OpenWith(memkv.New(), store.Options{Retention: time.Hour, EmbeddingDims: 256})
 	if err != nil {
 		panic(err)
 	}
@@ -65,7 +65,7 @@ func newTestBot(tg TG, botID int64, botUsername string) (*Bot, *store.DB) {
 			DB:      db,
 			LLM:     &llm.Fake{},
 			Limiter: ratelimit.New(cfg.Bot.RateLimit.GlobalPerMinute, cfg.Bot.RateLimit.ChatPerMinute, time.Now),
-			Admins:  &auth.Owner{ID: cfg.Telegram.OwnerID},
+			Admins:  auth.List{IDs: cfg.Telegram.AdminIDs},
 		},
 		logger:      slog.New(slog.NewTextHandler(discardWriter{}, nil)),
 		botID:       botID,

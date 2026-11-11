@@ -17,8 +17,8 @@ import (
 // Config is the full hooshang configuration.
 type Config struct {
 	Telegram struct {
-		Token   string `yaml:"token"`    // env HOOSHANG_TELEGRAM_TOKEN overrides
-		OwnerID int64  `yaml:"owner_id"` // required, > 0
+		Token    string  `yaml:"token"`     // env HOOSHANG_TELEGRAM_TOKEN overrides
+		AdminIDs []int64 `yaml:"admin_ids"` // required, at least one, each > 0
 	} `yaml:"telegram"`
 	LLM struct {
 		BaseURL     string        `yaml:"base_url"` // default http://localhost:1234/v1
@@ -33,6 +33,9 @@ type Config struct {
 		// EmbeddingModel is the embedding model served next to the chat model
 		// (e.g. text-embedding-bge-m3); "" turns retrieval (features.rag) off.
 		EmbeddingModel string `yaml:"embedding_model"`
+		// EmbeddingDims is the number of dimensions of the embedding model's
+		// vectors (1024 for bge-m3). A change wipes the stored vectors.
+		EmbeddingDims int `yaml:"embedding_dims"`
 		// ContextTokens is the context window the chat model is loaded with;
 		// prompts are trimmed to fit under it minus max_tokens. Default 32768.
 		ContextTokens int `yaml:"context_tokens"`
@@ -101,6 +104,7 @@ func defaults() *Config {
 	c.LLM.Timeout = 120 * time.Second
 	c.LLM.Tools = true
 	c.LLM.ContextTokens = 32768
+	c.LLM.EmbeddingDims = 1024
 	c.Bot.Name = "هوشنگ"
 	c.Bot.Aliases = []string{"هوشی", "hooshang"}
 	c.Bot.Language = "fa"
@@ -179,8 +183,13 @@ func (c *Config) Validate() error {
 	if c.Telegram.Token == "" {
 		return fmt.Errorf("telegram.token is required (set it in the config or HOOSHANG_TELEGRAM_TOKEN)")
 	}
-	if c.Telegram.OwnerID <= 0 {
-		return fmt.Errorf("telegram.owner_id must be > 0")
+	if len(c.Telegram.AdminIDs) == 0 {
+		return fmt.Errorf("telegram.admin_ids must list at least one Telegram user ID")
+	}
+	for _, id := range c.Telegram.AdminIDs {
+		if id <= 0 {
+			return fmt.Errorf("telegram.admin_ids must all be > 0, got %d", id)
+		}
 	}
 	if c.LLM.Model == "" {
 		return fmt.Errorf("llm.model is required")
@@ -196,6 +205,9 @@ func (c *Config) Validate() error {
 	}
 	if c.LLM.ContextTokens < c.LLM.MaxTokens+2048 {
 		return fmt.Errorf("llm.context_tokens must be at least max_tokens + 2048, got %d", c.LLM.ContextTokens)
+	}
+	if c.LLM.EmbeddingModel != "" && c.LLM.EmbeddingDims < 1 {
+		return fmt.Errorf("llm.embedding_dims must be >= 1, got %d", c.LLM.EmbeddingDims)
 	}
 	if c.Bot.HistoryMessages < 1 {
 		return fmt.Errorf("bot.history_messages must be >= 1, got %d", c.Bot.HistoryMessages)

@@ -43,12 +43,13 @@ func main() {
 	}
 	logger.Info("features", "on", cfg.Features.Active())
 
-	db, err := store.Open(cfg.Storage.Path, cfg.Bot.MessageRetention)
+	db, err := store.Open(cfg.Storage.Path, storeOptions(cfg))
 	if err != nil {
 		logger.Error("open store", "err", err)
 		os.Exit(1)
 	}
 	defer db.Close()
+	db.StartUpkeep(context.Background()) // Close stops it
 
 	tg, err := telego.NewBot(cfg.Telegram.Token)
 	if err != nil {
@@ -76,7 +77,7 @@ func main() {
 		DB:          db,
 		LLM:         client,
 		Limiter:     ratelimit.New(cfg.Bot.RateLimit.GlobalPerMinute, cfg.Bot.RateLimit.ChatPerMinute, time.Now),
-		Admins:      auth.Owner{ID: cfg.Telegram.OwnerID},
+		Admins:      auth.List{IDs: cfg.Telegram.AdminIDs},
 		Memory:      updater,
 		Transcriber: newTranscriber(cfg, logger),
 		FaalImage:   faalImage,
@@ -207,4 +208,14 @@ func groupConfig(cfg *config.Config) memory.GroupConfig {
 		gc.Samples = p.StyleSamples
 	}
 	return gc
+}
+
+// storeOptions are the options the database is opened with: the embedding
+// model only counts when retrieval is on.
+func storeOptions(cfg *config.Config) store.Options {
+	o := store.Options{Retention: cfg.Bot.MessageRetention, EmbeddingDims: cfg.LLM.EmbeddingDims}
+	if cfg.Features.RAG.On() {
+		o.EmbeddingModel = cfg.LLM.EmbeddingModel
+	}
+	return o
 }

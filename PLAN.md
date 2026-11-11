@@ -807,11 +807,14 @@ term, `Note` = the meaning, `By` = who taught it).
   `archive` (`Archived{UserID, Name, Text, Date}`, TTL `archive_ttl` 180 days) with a `by_user` row,
   and queued for embedding as `name: text`. A media description, once in, re-archives the message.
 - **Embedder (`bot/embed.go`):** one goroutine, batches of `batch` (16) texts per `/embeddings` call,
-  vectors L2-normalised and quantised to int8 (`rag.Quantize`, ~1 KB each) into `msg_vectors`,
-  `item_vectors` (memory items, re-embedded only when the text's hash changed) and `media_vectors`
-  (sticker/GIF descriptions). Message vectors are loaded into a per-chat in-memory `rag.Index`
-  (brute-force cosine). On start, archived messages without vectors are queued (backfill); a changed
-  embedding model wipes the vectors (`meta["embedding"]`).
+  vectors stored as the model gives them (`[]float32`, `llm.embedding_dims` 1024) in the ext stores
+  `msg_embeddings`, `item_embeddings` (memory items, re-embedded only when the text's hash changed)
+  and `media_embeddings` (sticker/GIF descriptions), each with a kvutil `vector` index (cosine).
+  Messages and media are partitioned and quantized (approximate, recall@5 ≈ 0.99 on real data); a
+  message search is limited to the chat by a condition. Items are scored exactly among the entity's
+  own. The `upkeep` runner of the store places new vectors in partitions and deletes the expired
+  ones. On start, archived messages without vectors are queued (backfill); a changed embedding
+  model or dims wipes the vectors when the store is opened (`meta["embedding"]`).
 - **Retrieval in a reply (`replyTask`):** one query vector per job (the trigger text plus the message
   it replies to; a spontaneous job uses the last 3 human lines). `relatedMessages`: top `top_k` (5)
   archived messages not in the transcript with cosine ≥ `min_score` (0.63), scored
@@ -821,7 +824,7 @@ term, `Note` = the meaning, `By` = who taught it).
   until the share is full. `find_media`: lexical matches first, then media vectors (cosine ≥ 0.5).
   `relatedTerms`: see §6b.
 - **Purge:** `/forgetme` and `/ignoreme` delete the member's archive rows, message vectors (through
-  `archive_by_user`) and item vectors, and evict them from the index.
+  `archive_by_user`) and item vectors; the vector indexes follow their stores.
 - **Token guard (`replyRequest`):** `llm.context_tokens` (32768) − `max_tokens` − the tool schemas is
   the budget (`prompts.EstimateTokens`, 3 runes per token). Over it, the task is rebuilt at trim
   levels: no related messages → no random profiles and no group memory → the transcript cut to its

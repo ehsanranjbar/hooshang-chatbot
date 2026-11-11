@@ -23,7 +23,10 @@ type fakeTG struct {
 	leaves  []*telego.LeaveChatParams
 
 	// member is returned by GetChatMember; memberErr makes it return an error.
+	// members, when set, gives each user their own membership instead (a user
+	// missing from it has left).
 	member    telego.ChatMember
+	members   map[int64]telego.ChatMember
 	memberErr error
 
 	sendErr error // returned by SendMessage (e.g. a 429)
@@ -100,9 +103,15 @@ func (f *fakeTG) SendChatAction(_ context.Context, p *telego.SendChatActionParam
 	return nil
 }
 
-func (f *fakeTG) GetChatMember(_ context.Context, _ *telego.GetChatMemberParams) (telego.ChatMember, error) {
+func (f *fakeTG) GetChatMember(_ context.Context, p *telego.GetChatMemberParams) (telego.ChatMember, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.members != nil && f.memberErr == nil {
+		if cm, ok := f.members[p.UserID]; ok {
+			return cm, nil
+		}
+		return &telego.ChatMemberLeft{Status: "left"}, nil
+	}
 	return f.member, f.memberErr
 }
 

@@ -72,7 +72,7 @@ func GroupExtract(d GroupData) (string, error) {
 type SystemData struct {
 	Name     string
 	Language string
-	Now      string   // formatted time (Asia/Tehran)
+	Now      string   // the time to the hour (FormatHour): the prompt changes once an hour, so LM Studio can reuse its evaluation
 	Persona  string   // bot.persona.text: replaces the built-in identity paragraph when set
 	Notes    []string // bot.persona.notes: appended as extra lines
 	Mood     string   // the mood of the day, as a short English phrase (may be empty)
@@ -120,6 +120,7 @@ type TaskData struct {
 	Mentions   bool   // profiles carry @username/id: explain how to mention members
 	Self       string // what the bot has said here before: stances, running jokes, promises (may be empty)
 	Related    string // older messages retrieved as relevant to the >> message (may be empty)
+	Admin      string // the admin rules when the author is the admin, just before the transcript (reply task only; may be empty)
 }
 
 // ExtractData is the input of the memory extract prompts.
@@ -241,6 +242,20 @@ func FormatNow(t time.Time) string {
 		loc = time.FixedZone("Tehran", 3*3600+30*60)
 	}
 	t = t.In(loc)
+	return i18n.FormatDateTime(t) + " (" + t.Format("2006-01-02 15:04") + ")"
+}
+
+// FormatHour is FormatNow rounded down to the hour. The system prompt uses it:
+// a prompt that changes every minute is evaluated from scratch on almost every
+// reply (LM Studio reuses only an identical prefix), and the time to the hour
+// is enough for the bot.
+func FormatHour(t time.Time) string {
+	loc, err := time.LoadLocation("Asia/Tehran")
+	if err != nil {
+		loc = time.FixedZone("Tehran", 3*3600+30*60)
+	}
+	t = t.In(loc)
+	t = time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, loc) // Truncate would round in UTC: Tehran is +3:30
 	return i18n.FormatDateTime(t) + " (" + t.Format("2006-01-02 15:04") + ")"
 }
 

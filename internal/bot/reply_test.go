@@ -38,7 +38,7 @@ func replyBot(t *testing.T, chatLimit int, responses ...llm.Response) (*Bot, *st
 	t.Helper()
 	tg := newFakeTG()
 	b, db := newTestBot(tg, testBotID, testBotUser)
-	b.deps.Cfg.Telegram.OwnerID = ownerID
+	b.deps.Cfg.Telegram.AdminIDs = []int64{ownerID}
 	b.deps.Admins = &ownerAdmins{ownerID}
 	tg.member = &telego.ChatMemberOwner{Status: "creator", User: telego.User{ID: ownerID}}
 	fake := &llm.Fake{Responses: responses}
@@ -136,9 +136,12 @@ func TestAdminOnlyTools(t *testing.T) {
 		if !strings.Contains(names, "hafez_faal") || !strings.Contains(names, "random_poem") {
 			t.Errorf("author %d: poem tools missing: %s", tc.from.ID, names)
 		}
-		sys := fake.Calls[0].Messages[0].Content
-		if strings.Contains(sys, "edit_memory") != tc.wantAdmin {
-			t.Errorf("author %d: admin rules in system prompt = %v", tc.from.ID, !tc.wantAdmin)
+		// The admin rules end the task; the system prompt is the same for everyone (prompt cache).
+		if sys := fake.Calls[0].Messages[0].Content; strings.Contains(sys, "edit_memory") {
+			t.Errorf("author %d: admin rules in the system prompt", tc.from.ID)
+		}
+		if task := fake.Calls[0].Messages[1].Content; strings.Contains(task, "edit_memory") != tc.wantAdmin {
+			t.Errorf("author %d: admin rules in the task = %v", tc.from.ID, !tc.wantAdmin)
 		}
 	}
 }
@@ -778,7 +781,7 @@ func TestFaalCaptionCutsOnWholeRunes(t *testing.T) {
 func TestAPIErrorIsNotCachedAsADenial(t *testing.T) {
 	b, _, tg, _ := replyBot(t, 10)
 	tg.memberErr = errors.New("telegram down")
-	if b.ownerInGroup(context.Background(), testChat) {
+	if b.adminInGroup(context.Background(), testChat) {
 		t.Fatal("allowed during an API error")
 	}
 	if len(tg.leaves) != 0 {

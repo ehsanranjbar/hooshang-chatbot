@@ -21,7 +21,7 @@ func TestSystemRenders(t *testing.T) {
 			t.Errorf("system prompt still has the behaviour rule %q", gone)
 		}
 	}
-	custom, _ := System(SystemData{Name: "x", Language: "fa", Now: "n", Persona: "You are Hooshi, the group's grandpa."})
+	custom, _ := System(SystemData{Name: "x", Language: "fa", Persona: "You are Hooshi, the group's grandpa."})
 	if !strings.Contains(custom, "grandpa") || strings.Contains(custom, "محاوره") {
 		t.Errorf("persona text did not replace the identity paragraph:\n%s", custom)
 	}
@@ -44,6 +44,34 @@ func TestReplyTaskRenders(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("reply task missing %q: %s", want, out)
 		}
+	}
+}
+
+// The admin rules sit just before the transcript, not in the system prompt:
+// the system prompt is then the same for every member and LM Studio can reuse
+// its evaluation. The prompt still ends with the instructions.
+func TestReplyTaskAdminRulesBeforeTranscript(t *testing.T) {
+	out, err := ReplyTask(TaskData{
+		Language: "fa", Profiles: "PROFILES", Related: "RELATED", Glossary: "GLOSSARY",
+		Transcript: "TRANSCRIPT", Task: "TASK", Admin: "ADMIN RULES",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := -1
+	for _, part := range []string{"PROFILES", "RELATED", "GLOSSARY", "ADMIN RULES", "TRANSCRIPT", "TASK"} {
+		i := strings.Index(out, part)
+		if i <= last {
+			t.Fatalf("%q is out of order (at %d, previous part at %d):\n%s", part, i, last, out)
+		}
+		last = i
+	}
+	if !strings.HasSuffix(strings.TrimSpace(out), "Always answer in fa (Persian).") {
+		t.Errorf("the prompt does not end with the instructions:\n%s", out)
+	}
+	member, _ := ReplyTask(TaskData{Language: "fa", Transcript: "TRANSCRIPT", Task: "TASK"})
+	if !strings.HasPrefix(member, "Recent messages") {
+		t.Errorf("without admin rules nothing comes before the transcript:\n%s", member)
 	}
 }
 
@@ -152,6 +180,17 @@ func TestAdminRulesModeration(t *testing.T) {
 	both := AdminRules(true, true)
 	if !strings.Contains(both, "edit_memory") || !strings.Contains(both, "set_moderation") {
 		t.Errorf("both blocks expected: %s", both)
+	}
+}
+
+func TestFormatHour(t *testing.T) {
+	// 11:47 UTC is 15:17 in Tehran: rounded down to 15:00.
+	got := FormatHour(time.Date(2026, 11, 4, 11, 47, 0, 0, time.UTC))
+	if !strings.HasSuffix(got, "(2026-11-04 15:00)") {
+		t.Errorf("FormatHour = %q", got)
+	}
+	if FormatHour(time.Date(2026, 11, 4, 11, 31, 0, 0, time.UTC)) != FormatHour(time.Date(2026, 11, 4, 12, 29, 0, 0, time.UTC)) {
+		t.Error("two times in the same Tehran hour render differently")
 	}
 }
 

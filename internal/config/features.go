@@ -44,13 +44,12 @@ type Features struct {
 // by meaning. It needs llm.embedding_model.
 type RAGFeature struct {
 	Enabled    bool          `yaml:"enabled"`
-	ArchiveTTL time.Duration `yaml:"archive_ttl"`  // how long archived messages are kept; default 4320h (180 days)
-	TopK       int           `yaml:"top_k"`        // older messages shown in a reply at most; default 5
-	MinScore   float64       `yaml:"min_score"`    // least cosine to count as relevant; default 0.63
-	DecayDays  int           `yaml:"decay_days"`   // half-life of the recency bonus; default 30
-	Batch      int           `yaml:"batch"`        // texts per embedding call; default 16
-	MaxQueue   int           `yaml:"max_queue"`    // pending embeddings; more wait for the next flush; default 500
-	MaxPerChat int           `yaml:"max_per_chat"` // message vectors kept in memory per chat; default 50000
+	ArchiveTTL time.Duration `yaml:"archive_ttl"` // how long archived messages are kept; default 4320h (180 days)
+	TopK       int           `yaml:"top_k"`       // older messages shown in a reply at most; default 5
+	MinScore   float64       `yaml:"min_score"`   // least cosine to count as relevant; default 0.63
+	DecayDays  int           `yaml:"decay_days"`  // half-life of the recency bonus; default 30
+	Batch      int           `yaml:"batch"`       // texts per embedding call; default 16
+	MaxQueue   int           `yaml:"max_queue"`   // pending embeddings; more wait for the next flush; default 500
 }
 
 // On reports whether the feature is on: its section is present and not disabled.
@@ -59,7 +58,7 @@ func (f *RAGFeature) On() bool { return f != nil && f.Enabled }
 // UnmarshalYAML fills the defaults, then the keys of the section.
 func (f *RAGFeature) UnmarshalYAML(n *yaml.Node) error {
 	type plain RAGFeature
-	*f = RAGFeature{Enabled: true, ArchiveTTL: 180 * 24 * time.Hour, TopK: 5, MinScore: 0.63, DecayDays: 30, Batch: 16, MaxQueue: 500, MaxPerChat: 50000}
+	*f = RAGFeature{Enabled: true, ArchiveTTL: 180 * 24 * time.Hour, TopK: 5, MinScore: 0.63, DecayDays: 30, Batch: 16, MaxQueue: 500}
 	return decodeFeature(n, "rag", (*plain)(f))
 }
 
@@ -438,8 +437,8 @@ func (f *Features) validate() error {
 	if g := f.Glossary; g.On() && (g.MaxItems < 1 || g.InPrompt < 1) {
 		return fmt.Errorf("features.glossary: max_items and in_prompt must be >= 1")
 	}
-	if r := f.RAG; r.On() && (r.ArchiveTTL <= 0 || r.TopK < 0 || r.MinScore < 0 || r.MinScore > 1 || r.DecayDays < 0 || r.Batch < 1 || r.MaxQueue < 1 || r.MaxPerChat < 100) {
-		return fmt.Errorf("features.rag: archive_ttl > 0, top_k >= 0, min_score in [0, 1], decay_days >= 0, batch and max_queue >= 1, max_per_chat >= 100")
+	if r := f.RAG; r.On() && (r.ArchiveTTL <= 0 || r.TopK < 0 || r.MinScore < 0 || r.MinScore > 1 || r.DecayDays < 0 || r.Batch < 1 || r.MaxQueue < 1) {
+		return fmt.Errorf("features.rag: archive_ttl > 0, top_k >= 0, min_score in [0, 1], decay_days >= 0, batch and max_queue >= 1")
 	}
 	if g := f.Greetings; g.On() && (g.Chance < 0 || g.Chance > 1 || g.MemberCooldown < 0 || g.ChatCooldown < 0) {
 		return fmt.Errorf("features.greetings: chance must be in [0, 1] and the cooldowns >= 0")

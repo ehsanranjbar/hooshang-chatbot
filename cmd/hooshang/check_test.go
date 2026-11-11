@@ -21,7 +21,7 @@ func writeConfig(t *testing.T, content string) string {
 const base = `
 telegram:
   token: "123:SECRET-TOKEN"
-  owner_id: 7
+  admin_ids: [7]
 llm:
   api_key: "SECRET-KEY"
   model: "m"

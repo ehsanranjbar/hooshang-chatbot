@@ -396,8 +396,8 @@ func TestModerateThroughRunReply(t *testing.T) {
 	if names := strings.Join(toolNames(fake.Calls[0]), ","); !strings.Contains(names, "moderate") || !strings.Contains(names, "set_moderation") {
 		t.Errorf("tools = %s", names)
 	}
-	if sys := fake.Calls[0].Messages[0].Content; !strings.Contains(sys, "call moderate") && !strings.Contains(sys, "MUST call moderate") {
-		t.Errorf("the admin rules lack the moderation block: %s", sys)
+	if task := fake.Calls[0].Messages[1].Content; !strings.Contains(task, "The admin also moderates the group through you") {
+		t.Errorf("the admin rules lack the moderation block: %s", task)
 	}
 	if len(tg.restricts) != 1 || tg.restricts[0].UserID != ali.ID {
 		t.Fatalf("restricts = %+v", tg.restricts)

@@ -109,7 +109,7 @@ func TestProfilesOff(t *testing.T) {
 	if p := req.Messages[1].Content; strings.Contains(p, "عاشق فوتبال") || strings.Contains(p, "شوخی نکن") || strings.Contains(p, "edit_memory") {
 		t.Errorf("the prompt has profile data:\n%s", p)
 	}
-	if strings.Contains(req.Messages[0].Content, "edit_memory") {
+	if strings.Contains(req.Messages[0].Content+req.Messages[1].Content, "edit_memory") {
 		t.Error("the admin rules (about edit_memory) were added")
 	}
 	for _, name := range toolNames(req) {

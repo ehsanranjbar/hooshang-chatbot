@@ -36,7 +36,7 @@ func main() {
 	if *data == "" {
 		*data = cfg.Storage.Path
 	}
-	db, err := store.Open(*data, cfg.Bot.MessageRetention)
+	db, err := store.Open(*data, storeOptions(cfg))
 	if err != nil {
 		fail(err)
 	}
@@ -55,7 +55,7 @@ func main() {
 		return
 	}
 
-	req, err := bot.DumpPrompt(bot.Deps{Cfg: cfg, DB: db, Admins: &auth.Owner{ID: cfg.Telegram.OwnerID}}, *botID, *chat, *msg, *full)
+	req, err := bot.DumpPrompt(bot.Deps{Cfg: cfg, DB: db, Admins: auth.List{IDs: cfg.Telegram.AdminIDs}}, *botID, *chat, *msg, *full)
 	if err != nil {
 		fail(err)
 	}
@@ -74,4 +74,14 @@ func main() {
 func fail(err error) {
 	fmt.Fprintln(os.Stderr, "promptdump:", err)
 	os.Exit(1)
+}
+
+// storeOptions are the options the database is opened with: the embedding
+// model only counts when retrieval is on.
+func storeOptions(cfg *config.Config) store.Options {
+	o := store.Options{Retention: cfg.Bot.MessageRetention, EmbeddingDims: cfg.LLM.EmbeddingDims}
+	if cfg.Features.RAG.On() {
+		o.EmbeddingModel = cfg.LLM.EmbeddingModel
+	}
+	return o
 }

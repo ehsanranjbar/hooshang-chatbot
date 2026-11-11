@@ -10,11 +10,11 @@ import (
 )
 
 func engines(t *testing.T) map[string]*DB {
-	mem, err := OpenWith(memkv.New(), time.Hour)
+	mem, err := OpenWith(memkv.New(), Options{Retention: time.Hour, EmbeddingDims: 256})
 	if err != nil {
 		t.Fatal(err)
 	}
-	bdg, err := Open(t.TempDir(), time.Hour)
+	bdg, err := Open(t.TempDir(), Options{Retention: time.Hour, EmbeddingDims: 256})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestStore(t *testing.T) {
 }
 
 func TestMessageTTL(t *testing.T) {
-	db, err := Open(t.TempDir(), time.Second)
+	db, err := Open(t.TempDir(), Options{Retention: time.Second, EmbeddingDims: 256})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,13 +117,13 @@ func TestMessageTTL(t *testing.T) {
 
 func TestReopen(t *testing.T) {
 	dir := t.TempDir()
-	db, err := Open(dir, time.Hour)
+	db, err := Open(dir, Options{Retention: time.Hour, EmbeddingDims: 256})
 	if err != nil {
 		t.Fatal(err)
 	}
 	db.UpdateMember(-1, 1, func(m *Member) { m.Username = "x" })
 	db.Close()
-	db, err = Open(dir, time.Hour) // migrations must accept the existing data
+	db, err = Open(dir, Options{Retention: time.Hour, EmbeddingDims: 256}) // migrations must accept the existing data
 	if err != nil {
 		t.Fatal(err)
 	}

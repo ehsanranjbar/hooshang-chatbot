@@ -17,12 +17,12 @@ func (b *Bot) allowed(ctx context.Context, chat telego.Chat, from *telego.User) 
 		if b.deps.Admins.IsAdmin(chat.ID, from.ID) {
 			return true
 		}
-		// This is how the owner finds their own ID.
+		// This is how an admin finds their own ID.
 		b.logger.Info("ignored private message", "user_id", from.ID)
 		return false
 
 	case "group", "supergroup":
-		return b.ownerInGroup(ctx, chat.ID)
+		return b.adminInGroup(ctx, chat.ID)
 
 	default:
 		// Channels and every other chat type are ignored.
@@ -43,11 +43,11 @@ type accessEntry struct {
 	expiry  time.Time
 }
 
-// ownerInGroup checks that the owner is a member of the group. The verdict is
+// adminInGroup checks that at least one configured admin is a member of the group. The verdict is
 // cached per chat for 1h (allowed) or 5m (denied). On a real denial it sends
 // NotAllowedHere once and leaves the chat. On an API error it denies for
 // errorTTL only and does NOT leave, so the group isn't locked out by a blip.
-func (b *Bot) ownerInGroup(ctx context.Context, chatID int64) bool {
+func (b *Bot) adminInGroup(ctx context.Context, chatID int64) bool {
 	b.accessMu.Lock()
 	if entry, ok := b.accessCache[chatID]; ok && time.Now().Before(entry.expiry) {
 		b.accessMu.Unlock()
@@ -55,7 +55,7 @@ func (b *Bot) ownerInGroup(ctx context.Context, chatID int64) bool {
 	}
 	b.accessMu.Unlock()
 
-	allowed, leave := b.checkOwner(ctx, chatID)
+	allowed, leave := b.checkAdmins(ctx, chatID)
 	ttl := ttlFor(allowed)
 	if !allowed && !leave {
 		ttl = errorTTL
@@ -79,19 +79,31 @@ func ttlFor(allowed bool) time.Duration {
 	return deniedTTL
 }
 
-// checkOwner calls GetChatMember for the owner and applies the §5 rules.
-// It returns whether the owner is accepted and whether a real denial occurred
-// (an API error denies but reports leave=false so the bot does not leave).
-func (b *Bot) checkOwner(ctx context.Context, chatID int64) (allowed, leave bool) {
-	cm, err := b.deps.TG.GetChatMember(ctx, &telego.GetChatMemberParams{
-		ChatID: newChatID(chatID),
-		UserID: b.deps.Cfg.Telegram.OwnerID,
-	})
-	if err != nil {
-		b.logger.Debug("getChatMember failed, denying without leaving", "chat", chatID, "err", err)
+// checkAdmins calls GetChatMember for each configured admin until one is a
+// member (§5 rules). It returns whether the group is accepted and whether a
+// real denial occurred: if any lookup failed and nobody was found, the API
+// error denies but reports leave=false so the bot does not leave.
+func (b *Bot) checkAdmins(ctx context.Context, chatID int64) (allowed, leave bool) {
+	failed := false
+	for _, id := range b.deps.Cfg.Telegram.AdminIDs {
+		cm, err := b.deps.TG.GetChatMember(ctx, &telego.GetChatMemberParams{
+			ChatID: newChatID(chatID),
+			UserID: id,
+		})
+		if err != nil {
+			b.logger.Debug("getChatMember failed", "chat", chatID, "admin", id, "err", err)
+			failed = true
+			continue
+		}
+		if memberAllowed(cm) {
+			return true, true
+		}
+	}
+	if failed {
+		b.logger.Debug("no admin found and a lookup failed, denying without leaving", "chat", chatID)
 		return false, false
 	}
-	return memberAllowed(cm), true
+	return false, true
 }
 
 // memberAllowed applies the §5 status rules to a chat member.

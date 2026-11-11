@@ -30,9 +30,9 @@ type embedRef struct {
 	hash   uint64
 }
 
-// embedder embeds texts in batches in the background and keeps a per-chat
-// in-memory index of message vectors for retrieval. It is nil when
-// features.rag is off or no embedding model is configured.
+// embedder embeds texts in batches in the background into the vector stores
+// of the database, which retrieval searches. It is nil when features.rag is
+// off or no embedding model is configured.
 type embedder struct {
 	b        *Bot
 	client   llm.Embedder
@@ -41,8 +41,6 @@ type embedder struct {
 	pending  []embedRef
 	wake     chan struct{}
 	done     chan struct{}
-	indexes  map[int64]*rag.Index // chat → message vectors
-	media    *rag.Index           // media key hash → vector
 	failed   int
 	embedded int
 }
@@ -58,7 +56,7 @@ func newEmbedder(b *Bot) *embedder {
 	if !ok {
 		return nil
 	}
-	return &embedder{b: b, client: e, model: model, wake: make(chan struct{}, 1), done: make(chan struct{}), indexes: map[int64]*rag.Index{}}
+	return &embedder{b: b, client: e, model: model, wake: make(chan struct{}, 1), done: make(chan struct{})}
 }
 
 // textHash is the FNV-64a of a text.
@@ -92,7 +90,6 @@ func (e *embedder) submit(r embedRef) {
 // run serves the queue until ctx is done, one batch at a time.
 func (e *embedder) run(ctx context.Context) {
 	defer close(e.done)
-	e.checkModel()
 	e.backfill()
 	for {
 		select {
@@ -106,19 +103,6 @@ func (e *embedder) run(ctx context.Context) {
 			}
 		}
 	}
-}
-
-// checkModel wipes the stored vectors when the embedding model changed.
-func (e *embedder) checkModel() {
-	meta, err := e.b.deps.DB.GetEmbeddingMeta()
-	if err != nil {
-		return
-	}
-	if meta.Model != "" && meta.Model != e.model {
-		e.b.logger.Info("embedding model changed: wiping vectors", "old", meta.Model, "new", e.model)
-		_ = e.b.deps.DB.WipeVectors()
-	}
-	_ = e.b.deps.DB.SetEmbeddingMeta(store.EmbeddingMeta{Model: e.model})
 }
 
 // backfill queues archived messages that have no vector yet.
@@ -166,19 +150,20 @@ func (e *embedder) flush(ctx context.Context) bool {
 	}
 	ttl := e.b.deps.Cfg.Features.RAG.ArchiveTTL
 	for i, r := range batch {
-		v := rag.Quantize(vecs[i])
-		v.Hash, v.At = r.hash, time.Now()
+		v := store.Embedding{Vec: vecs[i], Hash: r.hash, At: time.Now()}
+		var err error
 		switch r.kind {
 		case "msg":
-			if err := e.b.deps.DB.PutMsgVector(r.chatID, r.id, v, ttl); err == nil {
-				e.index(r.chatID).Put(r.id, v)
-			}
+			err = e.b.deps.DB.PutMsgVector(r.chatID, r.id, v, ttl)
 		case "item":
-			_ = e.b.deps.DB.PutItemVector(r.chatID, r.id, r.itemID, v)
+			err = e.b.deps.DB.PutItemVector(r.chatID, r.id, r.itemID, v)
 		case "media":
-			if err := e.b.deps.DB.PutMediaVector(r.media, v, e.mediaTTL()); err == nil {
-				e.mediaIndex().Put(store.MediaHash(r.media), v)
-			}
+			err = e.b.deps.DB.PutMediaVector(r.media, v, e.mediaTTL())
+		}
+		if err != nil {
+			// A vector of the wrong dimensions (embedding_dims does not match
+			// the model) or of zeros is refused by the index.
+			e.b.logger.Warn("storing a vector failed", "kind", r.kind, "err", err)
 		}
 	}
 	e.mu.Lock()
@@ -195,65 +180,30 @@ func (e *embedder) mediaTTL() time.Duration {
 	return 90 * 24 * time.Hour
 }
 
-// index returns the chat's message index, loaded from the store on first use.
-func (e *embedder) index(chatID int64) *rag.Index {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if x, ok := e.indexes[chatID]; ok {
-		return x
-	}
-	x := rag.NewIndex()
-	if vecs, err := e.b.deps.DB.MsgVectors(chatID); err == nil {
-		for id, v := range vecs {
-			x.Put(id, v)
-		}
-	}
-	e.indexes[chatID] = x
-	return x
-}
-
-// mediaIndex returns the global media index, loaded on first use.
-func (e *embedder) mediaIndex() *rag.Index {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.media != nil {
-		return e.media
-	}
-	e.media = rag.NewIndex()
-	if vecs, err := e.b.deps.DB.MediaVectors(); err == nil {
-		for h, v := range vecs {
-			e.media.Put(h, v)
-		}
-	}
-	return e.media
-}
-
 // query embeds one text now (for a reply), with a short timeout; ok is false
 // on any failure so callers fall back to the non-retrieval path.
-func (e *embedder) query(ctx context.Context, text string) (rag.Vector, bool) {
+func (e *embedder) query(ctx context.Context, text string) ([]float32, bool) {
 	text = strings.TrimSpace(text)
 	if text == "" {
-		return rag.Vector{}, false
+		return nil, false
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	vecs, err := e.client.Embed(ctx, e.model, []string{text})
 	if err != nil || len(vecs) != 1 {
 		e.b.logger.Debug("query embedding failed", "err", err)
-		return rag.Vector{}, false
+		return nil, false
 	}
-	return rag.Quantize(vecs[0]), true
+	return vecs[0], true
 }
 
 // status is one line for /status.
 func (e *embedder) status() string {
+	st, _ := e.b.deps.DB.MsgIndexStats()
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	n := 0
-	for _, x := range e.indexes {
-		n += x.Len()
-	}
-	return fmt.Sprintf("%s, %d vectors in memory, %d embedded, %d failed, %d pending", e.model, n, e.embedded, e.failed, len(e.pending))
+	return fmt.Sprintf("%s, %d partitions, %d unplaced, %d embedded, %d failed, %d pending",
+		e.model, st.Partitions, st.Unplaced, e.embedded, e.failed, len(e.pending))
 }
 
 // ---------------------------------------------------------------- hooks
@@ -302,14 +252,7 @@ func (b *Bot) purgeArchive(chatID, userID int64) {
 	if b.embedder == nil {
 		return
 	}
-	ids, err := b.deps.DB.PurgeArchive(chatID, userID)
-	if err != nil {
-		return
-	}
-	x := b.embedder.index(chatID)
-	for _, id := range ids {
-		x.Delete(id)
-	}
+	_, _ = b.deps.DB.PurgeArchive(chatID, userID)
 }
 
 // embedItems queues the embedding of memory items whose text changed since
@@ -352,12 +295,12 @@ func (b *Bot) embedMedia(uniqueID, text string) {
 // queryVector embeds the retrieval query of a job: the trigger text plus the
 // message it replies to; for a job without a trigger, the last three human
 // lines of the transcript. It is computed once per job.
-func (b *Bot) queryVector(ctx context.Context, j *job, msgs []store.Message) (rag.Vector, bool) {
+func (b *Bot) queryVector(ctx context.Context, j *job, msgs []store.Message) ([]float32, bool) {
 	if b.embedder == nil {
-		return rag.Vector{}, false
+		return nil, false
 	}
-	if j.queryVec != nil {
-		return *j.queryVec, j.queryOK
+	if j.queried {
+		return j.queryVec, j.queryOK
 	}
 	var parts []string
 	if j.msg != nil {
@@ -379,7 +322,7 @@ func (b *Bot) queryVector(ctx context.Context, j *job, msgs []store.Message) (ra
 		}
 	}
 	v, ok := b.embedder.query(ctx, strings.Join(parts, "\n"))
-	j.queryVec, j.queryOK = &v, ok
+	j.queryVec, j.queryOK, j.queried = v, ok, true
 	return v, ok
 }
 
@@ -400,22 +343,39 @@ func (b *Bot) relatedMessages(ctx context.Context, j *job, msgs []store.Message)
 	}
 	now := time.Now()
 	half := time.Duration(r.DecayDays) * 24 * time.Hour
-	dates := map[int64]time.Time{}
-	hits := b.embedder.index(j.chatID).Search(q, r.TopK, float32(r.MinScore), func(id int64) bool { return inTranscript[id] },
-		func(id int64, s float32) float32 {
-			a, err := b.deps.DB.GetArchived(j.chatID, id)
-			if err != nil {
-				return 0
-			}
-			dates[id] = a.Date
-			return s * rag.Decay(now.Sub(a.Date), half)
-		})
+	// The nearest messages are re-ranked by their age, so more are asked for
+	// than are kept, and as many more as the transcript may hide.
+	found, err := b.deps.DB.SearchMessages(j.chatID, q, 4*r.TopK+len(msgs))
+	if err != nil {
+		b.logger.Warn("message search failed", "chat", j.chatID, "err", err)
+		return ""
+	}
+	type hit struct {
+		store.Hit
+		a *store.Archived
+	}
+	var hits []hit
+	for _, h := range found {
+		if h.Score < float32(r.MinScore) || inTranscript[h.ID] {
+			continue
+		}
+		a, err := b.deps.DB.GetArchived(j.chatID, h.ID)
+		if err != nil {
+			continue // expired before its vector
+		}
+		h.Score *= rag.Decay(now.Sub(a.Date), half)
+		hits = append(hits, hit{h, a})
+	}
+	sort.SliceStable(hits, func(i, k int) bool { return hits[i].Score > hits[k].Score })
+	if len(hits) > r.TopK {
+		hits = hits[:r.TopK]
+	}
 	var lines []string
 	var scores []string
 	seen := map[string]bool{}
 	for _, h := range hits {
-		a, err := b.deps.DB.GetArchived(j.chatID, h.ID)
-		if err != nil || seen[a.Text] {
+		a := h.a
+		if seen[a.Text] {
 			continue
 		}
 		seen[a.Text] = true
@@ -455,10 +415,10 @@ func worthRetrieving(j *job) bool {
 // items closest to the job's query, until the rendered size fits. ok is false
 // when retrieval is off or the query failed.
 func (b *Bot) selectItems(j job, entity int64, mem store.Memory, share int) ([]store.Item, bool) {
-	if b.embedder == nil || j.queryVec == nil || !j.queryOK {
+	if b.embedder == nil || !j.queryOK {
 		return nil, false
 	}
-	vecs, err := b.deps.DB.ItemVectors(j.chatID, entity)
+	scores, err := b.deps.DB.ScoreItems(j.chatID, entity, j.queryVec)
 	if err != nil {
 		return nil, false
 	}
@@ -479,9 +439,9 @@ func (b *Bot) selectItems(j job, entity int64, mem store.Memory, share int) ([]s
 	}
 	var ranked []scored
 	for _, it := range rest {
-		s := float32(-1)
-		if v, ok := vecs[it.ID]; ok {
-			s = rag.Cosine(*j.queryVec, v)
+		s, ok := scores[it.ID]
+		if !ok {
+			s = -1
 		}
 		ranked = append(ranked, scored{it, s})
 	}
@@ -514,7 +474,7 @@ func (b *Bot) relatedTerms(chatID int64, transcript string, have []store.Item, i
 	if !ok {
 		return nil
 	}
-	vecs, err := b.deps.DB.ItemVectors(chatID, store.GroupEntity)
+	scores, err := b.deps.DB.ScoreItems(chatID, store.GroupEntity, q)
 	if err != nil {
 		return nil
 	}
@@ -528,10 +488,8 @@ func (b *Bot) relatedTerms(chatID int64, transcript string, have []store.Item, i
 	}
 	var ranked []scored
 	for _, t := range terms {
-		if v, ok := vecs[t.ID]; ok && !seen[t.ID] {
-			if s := rag.Cosine(q, v); s >= 0.6 {
-				ranked = append(ranked, scored{t, s})
-			}
+		if s, ok := scores[t.ID]; ok && !seen[t.ID] && s >= 0.6 {
+			ranked = append(ranked, scored{t, s})
 		}
 	}
 	sort.Slice(ranked, func(i, k int) bool { return ranked[i].s > ranked[k].s })
@@ -551,8 +509,16 @@ func (b *Bot) relatedMedia(ctx context.Context, kind, query string, n int, skip 
 	if !ok {
 		return nil
 	}
+	hits, err := b.deps.DB.NearestMedia(q, n*2)
+	if err != nil {
+		b.logger.Warn("media search failed", "err", err)
+		return nil
+	}
 	var out []store.MediaDesc
-	for _, h := range b.embedder.mediaIndex().Search(q, n*2, 0.5, nil, nil) {
+	for _, h := range hits {
+		if h.Score < 0.5 {
+			break
+		}
 		m, err := b.deps.DB.MediaByHash(h.ID)
 		if err != nil || m.FileID == "" || skip[m.UniqueID] || (kind != "" && m.Kind != kind) {
 			continue

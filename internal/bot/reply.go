@@ -91,9 +91,6 @@ func (b *Bot) runReply(ctx context.Context, j job) {
 // oldest transcript lines.
 func (b *Bot) replyRequest(ctx context.Context, j *job) (llm.Request, map[string]llm.ToolFunc) {
 	sys := b.systemPrompt(j.chatID)
-	if j.authorID() > 0 && b.deps.Admins.IsAdmin(j.chatID, j.authorID()) {
-		sys += prompts.AdminRules(b.deps.Cfg.Features.Profiles.On(), b.deps.Cfg.Features.Moderation.On())
-	}
 	tools, handlers := b.toolsFor(*j)
 	limit := b.deps.Cfg.LLM.ContextTokens - b.deps.Cfg.LLM.MaxTokens - toolTokens(tools)
 	var userMsg string
@@ -111,6 +108,16 @@ func (b *Bot) replyRequest(ctx context.Context, j *job) (llm.Request, map[string
 		MaxTokens:   b.deps.Cfg.LLM.MaxTokens,
 		Tools:       tools,
 	}, handlers
+}
+
+// adminRules are the extra rules of a reply to the admin, or "". They go at
+// the end of the task, not in the system prompt, so the system prompt stays the
+// same for everyone and LM Studio can reuse its evaluation across replies.
+func (b *Bot) adminRules(j job) string {
+	if j.authorID() <= 0 || !b.deps.Admins.IsAdmin(j.chatID, j.authorID()) {
+		return ""
+	}
+	return strings.TrimSpace(prompts.AdminRules(b.deps.Cfg.Features.Profiles.On(), b.deps.Cfg.Features.Moderation.On()))
 }
 
 // toolTokens is a rough token cost of the tool schemas.
@@ -160,6 +167,7 @@ func (b *Bot) replyTask(ctx context.Context, j *job, level int) string {
 		Variety:    b.varietyNote(j.chatID),
 		Bubbles:    b.deps.Cfg.Bot.Human.Bubbles,
 		Mentions:   profiles != "",
+		Admin:      b.adminRules(*j),
 	})
 	return userMsg
 }
